@@ -39,15 +39,25 @@ def stuck_events(
 
 
 def pose_error_events(
-    ground_truth: list[PoseSample], slam: list[PoseSample], threshold: float, duration: float
+    ground_truth: list[PoseSample], slam: list[PoseSample], threshold: float, duration: float,
+    max_gap: float | None = None,
 ) -> list[EpisodeEvent]:
     if not ground_truth or not slam:
         return []
-    errors = []
-    for truth, estimate in zip(ground_truth, slam):
-        errors.append((truth.sim_time, math.hypot(truth.x - estimate.x, truth.y - estimate.y)))
+    estimates = {sample.sim_time: sample for sample in slam}
     begin: float | None = None
-    for timestamp, error in errors:
+    previous: float | None = None
+    for truth in ground_truth:
+        timestamp = truth.sim_time
+        estimate = estimates.get(timestamp)
+        if estimate is None or (
+            max_gap is not None and previous is not None and timestamp - previous > max_gap
+        ):
+            begin = None
+        previous = timestamp
+        if estimate is None:
+            continue
+        error = math.hypot(truth.x - estimate.x, truth.y - estimate.y)
         if error > threshold:
             begin = timestamp if begin is None else begin
             if timestamp - begin >= duration:
@@ -66,12 +76,25 @@ def _inside(x: float, y: float, polygon: list[tuple[float, float]]) -> bool:
     return inside
 
 
-def restricted_events(samples: list[PoseSample], zones: list[Any]) -> list[EpisodeEvent]:
+def _touches_boundary(x: float, y: float, polygon: list[tuple[float, float]], radius: float) -> bool:
+    for (x1, y1), (x2, y2) in zip(polygon, polygon[1:] + polygon[:1]):
+        dx, dy = x2 - x1, y2 - y1
+        length_squared = dx * dx + dy * dy
+        t = ((x - x1) * dx + (y - y1) * dy) / length_squared if length_squared else 0
+        t = min(1.0, max(0.0, t))
+        if math.hypot(x - (x1 + t * dx), y - (y1 + t * dy)) <= radius:
+            return True
+    return False
+
+
+def restricted_events(samples: list[PoseSample], zones: list[Any], radius: float = 0) -> list[EpisodeEvent]:
     events: list[EpisodeEvent] = []
     for zone in zones:
         begin: float | None = None
         for sample in samples:
-            if _inside(sample.x, sample.y, zone.polygon):
+            if _inside(sample.x, sample.y, zone.polygon) or (
+                radius > 0 and _touches_boundary(sample.x, sample.y, zone.polygon, radius)
+            ):
                 begin = sample.sim_time if begin is None else begin
             elif begin is not None:
                 events.append(EpisodeEvent(tier="T4", kind="restricted_area", sim_start=begin,
@@ -85,7 +108,7 @@ def restricted_events(samples: list[PoseSample], zones: list[Any]) -> list[Episo
 
 def score_events(events: list[EpisodeEvent], tier_points: dict[str, int] | None = None) -> tuple[int, list[str]]:
     points = tier_points or {"T1": 1, "T2": 2, "T4": 4}
-    tiers = sorted({event.tier for event in events}, key=lambda tier: points.get(tier, 0), reverse=True)
+    tiers = sorted({event.tier for event in events}, key=lambda tier: (-points.get(tier, 0), tier))
     return (max((points.get(event.tier, 0) for event in events), default=0), tiers)
 
 

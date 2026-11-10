@@ -1,0 +1,222 @@
+"""ROS-side mission driver. This module runs in the simulator's ROS domain."""
+
+from __future__ import annotations
+
+from collections import deque
+from dataclasses import asdict, dataclass
+import json
+import math
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import sys
+
+from action_msgs.msg import GoalStatus
+from ament_index_python.packages import get_package_share_directory
+from lifecycle_msgs.msg import State
+from lifecycle_msgs.srv import GetState
+from nav2_msgs.action import NavigateToPose
+from nav_msgs.msg import Odometry
+import rclpy
+from rclpy.action import ActionClient
+from rclpy.node import Node
+from rclpy.parameter import Parameter
+from rclpy.qos import qos_profile_sensor_data
+from rclpy.time import Time
+from tf2_ros import Buffer, TransformException, TransformListener
+
+
+@dataclass(frozen=True)
+class PoseSample:
+    sim_time: float
+    x: float
+    y: float
+    yaw: float
+
+
+def yaw(rotation) -> float:
+    return math.atan2(
+        2 * (rotation.w * rotation.z + rotation.x * rotation.y),
+        1 - 2 * (rotation.y**2 + rotation.z**2),
+    )
+
+
+class Mission(Node):
+    def __init__(self, output: Path):
+        super().__init__("envfuzz_mission", parameter_overrides=[Parameter("use_sim_time", value=True)])
+        self.client = ActionClient(self, NavigateToPose, "/navigate_to_pose")
+        self.lifecycle = self.create_client(GetState, "/bt_navigator/get_state")
+        self.transforms = Buffer()
+        self.listener = TransformListener(self.transforms, self)
+        self.create_subscription(Odometry, "/envfuzz/ground_truth", self.record, qos_profile_sensor_data)
+        self.output = output
+        self.origin: PoseSample | None = None
+        self.previous: PoseSample | None = None
+        self.started: float | None = None
+        self.distance = 0.0
+        self.samples = 0
+        self.paired = 0
+        self.squared_pose_error = 0.0
+        self.pending = deque()
+        self.map_origin: tuple[float, float, float] | None = None
+        self.world_origin: PoseSample | None = None
+        self.telemetry = (output / "telemetry.jsonl").open("w", encoding="utf-8", buffering=1)
+
+    def record(self, message: Odometry) -> None:
+        pose = message.pose.pose
+        stamp = Time.from_msg(message.header.stamp)
+        sample = PoseSample(sim_time=stamp.nanoseconds / 1e9,
+                            x=pose.position.x, y=pose.position.y, yaw=yaw(pose.orientation))
+        self.origin = sample
+        if self.started is None or sample.sim_time < self.started:
+            return
+        if self.previous is not None:
+            if sample.sim_time <= self.previous.sim_time:
+                return
+            self.distance += math.hypot(sample.x - self.previous.x, sample.y - self.previous.y)
+        self.previous = sample
+        self.samples += 1
+        self.pending.append((sample, stamp))
+        self.flush_telemetry()
+
+    def flush_telemetry(self, final: bool = False) -> None:
+        while self.pending:
+            sample, stamp = self.pending[0]
+            estimate = self.estimate(stamp)
+            if estimate is None and not final and self.now() - sample.sim_time < 0.5:
+                break
+            self.pending.popleft()
+            if estimate is not None:
+                self.paired += 1
+                self.squared_pose_error += (sample.x - estimate.x)**2 + (sample.y - estimate.y)**2
+            row = {"ground_truth": asdict(sample),
+                   "estimated": asdict(estimate) if estimate is not None else None}
+            self.telemetry.write(json.dumps(row) + "\n")
+
+    def estimate(self, stamp: Time) -> PoseSample | None:
+        try:
+            estimate = self.transforms.lookup_transform("map", "base_footprint", stamp).transform
+        except TransformException:
+            return None
+        map_x, map_y, offset = self.map_origin
+        anchor = self.world_origin
+        dx, dy = estimate.translation.x - map_x, estimate.translation.y - map_y
+        c, s = math.cos(offset), math.sin(offset)
+        return PoseSample(sim_time=stamp.nanoseconds / 1e9,
+                          x=anchor.x + dx * c + dy * s, y=anchor.y - dx * s + dy * c,
+                          yaw=yaw(estimate.rotation) - offset)
+
+    def now(self) -> float:
+        return self.get_clock().now().nanoseconds / 1e9
+
+    def run(self, goals: list[dict], launch: subprocess.Popen, timeout: float) -> dict:
+        state = None
+        while True:
+            self.spin(launch)
+            if not (self.now() > 0 and self.origin is not None and self.client.server_is_ready()):
+                continue
+            try:
+                initial = self.transforms.lookup_transform("map", "base_footprint", Time()).transform
+            except TransformException:
+                continue
+            if state is None and self.lifecycle.service_is_ready():
+                state = self.lifecycle.call_async(GetState.Request())
+            elif state is not None and state.done():
+                if state.result().current_state.id == State.PRIMARY_STATE_ACTIVE:
+                    break
+                state = None
+        self.started = self.now()
+        anchor = self.origin
+        offset = yaw(initial.rotation) - anchor.yaw
+        self.map_origin = (initial.translation.x, initial.translation.y, offset)
+        self.world_origin = anchor
+        c, s = math.cos(offset), math.sin(offset)
+
+        def finish(status, reason=None):
+            self.flush_telemetry(final=True)
+            duration = max(0.0, self.now() - self.started)
+            (self.output / "metrics.json").write_text(json.dumps({
+                "goals_reached": reached,
+                "goal_count": len(goals),
+                "path_length_m": self.distance,
+                "ground_truth_samples": self.samples,
+                "paired_pose_samples": self.paired,
+                "position_rmse_m": math.sqrt(self.squared_pose_error / self.paired) if self.paired else None,
+            }, indent=2) + "\n", encoding="utf-8")
+            return {"status": status, "classification": "behavior",
+                    "reason": reason, "sim_duration": duration}
+
+        reached = 0
+        for goal in goals:
+            request = NavigateToPose.Goal()
+            request.pose.header.frame_id = "map"
+            request.pose.header.stamp = self.get_clock().now().to_msg()
+            dx, dy = goal["x"] - anchor.x, goal["y"] - anchor.y
+            request.pose.pose.position.x = initial.translation.x + dx * c - dy * s
+            request.pose.pose.position.y = initial.translation.y + dx * s + dy * c
+            request.pose.pose.orientation.z = math.sin((goal["yaw"] + offset) / 2)
+            request.pose.pose.orientation.w = math.cos((goal["yaw"] + offset) / 2)
+            accepted = self.client.send_goal_async(request)
+            if not self.wait(accepted, launch, timeout):
+                return finish("timeout", "Simulation-time mission limit expired")
+            handle = accepted.result()
+            if not handle.accepted:
+                raise RuntimeError("Nav2 rejected the navigation goal")
+            outcome = handle.get_result_async()
+            if not self.wait(outcome, launch, timeout):
+                handle.cancel_goal_async()
+                return finish("timeout", "Simulation-time mission limit expired")
+            response = outcome.result()
+            if response.status != GoalStatus.STATUS_SUCCEEDED:
+                return finish("mission_failed", f"Nav2 reported action status {response.status}")
+            reached += 1
+        return finish("completed")
+
+    def spin(self, launch: subprocess.Popen) -> None:
+        if launch.poll() is not None:
+            raise RuntimeError(f"ROS launch exited with code {launch.returncode}")
+        rclpy.spin_once(self, timeout_sec=0.1)
+
+    def wait(self, future, launch: subprocess.Popen, timeout: float) -> bool:
+        while not future.done():
+            if self.now() - self.started >= timeout:
+                return False
+            self.spin(launch)
+        return True
+
+
+def main() -> None:
+    output = Path(sys.argv[1])
+    timeout = float(sys.argv[2])
+    scenario = json.loads((output / "scenario.json").read_text(encoding="utf-8"))
+    start = scenario["start"]
+    command = [
+        "ros2", "launch", "envfuzz_sim", "headless.launch.py",
+        f"world:={output / 'world.sdf'}",
+        f"x_pose:={start['x']}", f"y_pose:={start['y']}", f"yaw:={start['yaw']}",
+    ]
+    params = output / "nav2.yaml"
+    if not params.is_file():
+        nav2 = Path(get_package_share_directory("nav2_bringup"))
+        shutil.copyfile(nav2 / "params" / "nav2_params.yaml", params)
+    command.append(f"params_file:={params}")
+    rclpy.init(args=[])
+    mission = Mission(output)
+    try:
+        with subprocess.Popen(command) as launch:
+            try:
+                result = mission.run(scenario["goals"], launch, timeout)
+            finally:
+                if launch.poll() is None:
+                    launch.send_signal(signal.SIGINT)
+                    launch.wait()
+        (output / "mission.json").write_text(json.dumps(result), encoding="utf-8")
+    finally:
+        mission.telemetry.close()
+        mission.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == "__main__":
+    main()

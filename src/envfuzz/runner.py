@@ -84,12 +84,19 @@ class EpisodeRunner:
 def _terminate(process: subprocess.Popen[str]) -> None:
     try:
         os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        process.wait()
+        return
+    try:
         process.wait(timeout=2)
-    except (ProcessLookupError, subprocess.TimeoutExpired):
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+    except subprocess.TimeoutExpired:
+        pass
+    # A launch process may exit before every descendant has handled SIGTERM.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait()
 
 
 def _write_bundle(output: str | Path, scenario: Scenario, result: EpisodeResult, logs: str = "") -> None:

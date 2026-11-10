@@ -4,4 +4,4 @@ test:
 lint:
 	python3 -m compileall -q src
 test-integration:
-	python3 -m pytest -m integration
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 ENVFUZZ_GAZEBO_TEST=1 python3 -m pytest -m integration

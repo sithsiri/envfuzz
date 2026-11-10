@@ -7,34 +7,35 @@ import json
 import math
 from pathlib import Path
 from typing import Any, Literal
+from xml.etree import ElementTree as ET
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SUPPORTED_VERSION = "1"
 
 
 class Pose(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     x: float
     y: float
     yaw: float = 0.0
 
 
 class Size(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     x: float = Field(gt=0)
     y: float = Field(gt=0)
     z: float = Field(default=1.0, gt=0)
 
 
 class ScenarioObject(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     id: str = Field(min_length=1, pattern=r"^[A-Za-z0-9_-]+$")
     shape: Literal["box", "cylinder"]
     pose: Pose
-    size: Size | None = None
-    radius: float | None = Field(default=None, gt=0)
+    size: Size | None = Field(default=None, validate_default=True)
+    radius: float | None = Field(default=None, gt=0, validate_default=True)
     height: float = Field(default=1.0, gt=0)
 
     @field_validator("size")
@@ -125,13 +126,32 @@ def _bounds(obj: ScenarioObject) -> tuple[float, float, float, float]:
         return (obj.pose.x - radius, obj.pose.x + radius, obj.pose.y - radius, obj.pose.y + radius)
     size = obj.size
     assert size is not None
-    half_x, half_y = size.x / 2, size.y / 2
+    cosine, sine = abs(math.cos(obj.pose.yaw)), abs(math.sin(obj.pose.yaw))
+    half_x = (size.x * cosine + size.y * sine) / 2
+    half_y = (size.x * sine + size.y * cosine) / 2
     return (obj.pose.x - half_x, obj.pose.x + half_x, obj.pose.y - half_y, obj.pose.y + half_y)
 
 
 def validate_scenario(scenario: Scenario, clearance: float = 0.35) -> list[str]:
     violations: list[str] = []
     world = scenario.world
+    for axis in ("x", "y"):
+        lower = world.get(f"min_{axis}")
+        upper = world.get(f"max_{axis}")
+        if lower is None or upper is None or not (
+            math.isfinite(lower) and math.isfinite(upper) and lower < upper
+        ):
+            violations.append(f"world: min_{axis} and max_{axis} must be finite and increasing")
+    if violations:
+        return violations
+    mission_poses = [("start", scenario.start)]
+    mission_poses.extend((f"goal {index}", goal) for index, goal in enumerate(scenario.goals, 1))
+    for name, pose in mission_poses:
+        if not (
+            world["min_x"] + clearance <= pose.x <= world["max_x"] - clearance
+            and world["min_y"] + clearance <= pose.y <= world["max_y"] - clearance
+        ):
+            violations.append(f"{name}: violates wall clearance")
     for obj in scenario.objects:
         min_x, max_x, min_y, max_y = _bounds(obj)
         if min_x < world["min_x"] or max_x > world["max_x"] or min_y < world["min_y"] or max_y > world["max_y"]:
@@ -167,29 +187,73 @@ def compile_sdf(scenario: Scenario) -> str:
         raise ValueError("; ".join(violations))
     if scenario.challenge.get("dynamic_events"):
         raise ValueError("dynamic_events are not supported in scenario version 1")
-    lines = [
-        '<?xml version="1.0" ?>',
-        '<sdf version="1.9">',
-        '  <world name="envfuzz">',
-        "    <gravity>0 0 -9.81</gravity>",
-    ]
+    sdf = ET.Element("sdf", version="1.9")
+    world = ET.SubElement(sdf, "world", name="envfuzz")
+    ET.SubElement(world, "gravity").text = "0 0 -9.81"
+    for system, class_name in (
+        ("physics", "Physics"),
+        ("user-commands", "UserCommands"),
+        ("sensors", "Sensors"),
+        ("imu", "Imu"),
+    ):
+        plugin = ET.SubElement(
+            world, "plugin", filename=f"gz-sim-{system}-system",
+            name=f"gz::sim::systems::{class_name}",
+        )
+        if system == "sensors":
+            ET.SubElement(plugin, "render_engine").text = "ogre2"
+
+    bounds = scenario.world
+    min_x, max_x = bounds["min_x"], bounds["max_x"]
+    min_y, max_y = bounds["min_y"], bounds["max_y"]
+    width, depth = max_x - min_x, max_y - min_y
+    center_x, center_y = min_x + width / 2, min_y + depth / 2
+    thickness, wall_height = 0.1, 2.5
+    margin = thickness / 2
+    room_boxes = (
+        ("floor", (center_x, center_y, -margin), (width + 2 * thickness, depth + 2 * thickness, thickness)),
+        ("wall_west", (min_x - margin, center_y, wall_height / 2), (thickness, depth, wall_height)),
+        ("wall_east", (max_x + margin, center_y, wall_height / 2), (thickness, depth, wall_height)),
+        ("wall_south", (center_x, min_y - margin, wall_height / 2), (width + 2 * thickness, thickness, wall_height)),
+        ("wall_north", (center_x, max_y + margin, wall_height / 2), (width + 2 * thickness, thickness, wall_height)),
+    )
+    for name, position, size in room_boxes:
+        _add_static_model(world, name, (*position, 0, 0, 0), "box", {"size": _numbers(size)})
+
     for obj in sorted(scenario.objects, key=lambda item: item.id):
-        lines.extend([f'    <model name="{obj.id}">', "      <static>true</static>"])
         if obj.shape == "box":
             size = obj.size
             assert size is not None
-            geometry = f"<box><size>{size.x} {size.y} {size.z}</size></box>"
+            height = size.z
+            dimensions = {"size": _numbers((size.x, size.y, height))}
         else:
-            geometry = f"<cylinder><radius>{obj.radius}</radius><length>{obj.height}</length></cylinder>"
-        lines.extend([
-            f"      <pose>{obj.pose.x} {obj.pose.y} 0 {obj.pose.yaw} 0 0</pose>",
-            "      <link name=\"link\">",
-            f"        <collision name=\"collision\"><geometry>{geometry}</geometry></collision>",
-            "      </link>",
-            "    </model>",
-        ])
-    lines.extend(["  </world>", "</sdf>", ""])
-    return "\n".join(lines)
+            height = obj.height
+            dimensions = {"radius": str(obj.radius), "length": str(height)}
+        pose = (obj.pose.x, obj.pose.y, height / 2, 0, 0, obj.pose.yaw)
+        _add_static_model(world, f"obstacle_{obj.id}", pose, obj.shape, dimensions)
+
+    ET.indent(sdf, space="  ")
+    return '<?xml version="1.0" ?>\n' + ET.tostring(sdf, encoding="unicode") + "\n"
+
+
+def _numbers(values: tuple[float, ...]) -> str:
+    return " ".join(str(value) for value in values)
+
+
+def _add_static_model(
+    world: ET.Element, name: str, pose: tuple[float, ...],
+    shape: str, dimensions: dict[str, str],
+) -> None:
+    model = ET.SubElement(world, "model", name=name)
+    ET.SubElement(model, "static").text = "true"
+    ET.SubElement(model, "pose").text = _numbers(pose)
+    link = ET.SubElement(model, "link", name="link")
+    # Rendering-based LiDAR sees visuals while physics uses collision geometry.
+    for kind in ("collision", "visual"):
+        element = ET.SubElement(link, kind, name=kind)
+        geometry = ET.SubElement(ET.SubElement(element, "geometry"), shape)
+        for dimension, value in dimensions.items():
+            ET.SubElement(geometry, dimension).text = value
 
 
 SCENARIO_JSON_SCHEMA = Scenario.model_json_schema()

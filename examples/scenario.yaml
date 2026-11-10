@@ -3,6 +3,9 @@ seed: 42
 start: {x: 0.0, y: 0.0, yaw: 0.0}
 goals:
   - {x: 2.0, y: 0.0, yaw: 0.0}
+restricted_zones:
+  - id: storage
+    polygon: [[-4, 3], [-3, 3], [-3, 4], [-4, 4]]
 objects:
   - id: table
     shape: box

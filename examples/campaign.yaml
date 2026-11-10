@@ -1,0 +1,6 @@
+layouts: [apartment, corridor, open_room]
+methods: [uniform, stratified]
+seeds: [42]
+episodes_per_cell: 3
+timeout: 90
+watchdog: 180

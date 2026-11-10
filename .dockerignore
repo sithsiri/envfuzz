@@ -1,0 +1,9 @@
+.git
+runs
+build
+install
+log
+.venv
+.pytest_cache
+**/__pycache__
+**/*.egg-info

@@ -22,6 +22,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["integration: requires a running ROS 2 and Gazebo environment"]
 
 [tool.ruff]
 line-length = 100

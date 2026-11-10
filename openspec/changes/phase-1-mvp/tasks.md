@@ -7,11 +7,11 @@
 
 ## 2. CPU-only simulation foundation
 
-- [ ] 2.1 Create the pinned CPU-only Ubuntu 24.04 / ROS 2 Jazzy / Gazebo Harmonic image with `ros_gz`, Nav2, SLAM, `nav2_minimal_tb3_sim`, and the envfuzz package; verify `docker build` succeeds without NVIDIA or X11 dependencies.
-- [ ] 2.2 Measure Gazebo LiDAR with Mesa software rendering at 360 rays and record scans/second, CPU usage, and real-time factor in ADR 0003; verify the recommendation and material-effect implications are explicit.
-- [ ] 2.3 Implement the selected LiDAR path while preserving the documented scan topic contract; verify the sensor publishes in the headless image with DISPLAY unset.
-- [ ] 2.4 Build the apartment SDF world, circular differential-drive robot, sensors, odometry, and ground-truth pose publisher from redistributable primitives/assets; verify the asset license record and required topics are present.
-- [ ] 2.5 Add headless bring-up for Gazebo, `/clock`, sensor/control bridges, Nav2, and `slam_toolbox` with `use_sim_time`; verify the unfuzzed robot reaches a default goal without a display.
+- [x] 2.1 Create the pinned CPU-only Ubuntu 24.04 / ROS 2 Jazzy / Gazebo Harmonic image with `ros_gz`, Nav2, SLAM, `nav2_minimal_tb3_sim`, and the envfuzz package; verify `docker build` succeeds without NVIDIA or X11 dependencies.
+- [x] 2.2 Measure Gazebo LiDAR with Mesa software rendering at 360 rays and record scans/second, CPU usage, and real-time factor in ADR 0003; verify the recommendation and material-effect implications are explicit.
+- [x] 2.3 Implement the selected LiDAR path while preserving the documented scan topic contract; verify the sensor publishes in the headless image with DISPLAY unset.
+- [x] 2.4 Build the apartment SDF world, circular differential-drive robot, sensors, odometry, and ground-truth pose publisher from redistributable primitives/assets; verify the asset license record and required topics are present.
+- [x] 2.5 Add headless bring-up for Gazebo, `/clock`, sensor/control bridges, Nav2, and `slam_toolbox` with `use_sim_time`; verify the unfuzzed robot reaches a default goal without a display.
 - [x] 2.6 Add `envfuzz doctor` and runtime version capture; verify it prints all pinned component versions both in the image and in a sample run bundle.
 
 ## 3. Scenario compilation and validity
@@ -22,14 +22,14 @@
 
 ## 4. Episode runner and outputs
 
-- [ ] 4.1 Implement the single-episode process-tree runner with scenario validation, world compilation, launch, goal submission, and normalized observation collection; verify a valid scenario completes the core loop.
+- [x] 4.1 Implement the single-episode process-tree runner with scenario validation, world compilation, launch, goal submission, and normalized observation collection; verify a valid scenario completes the core loop.
 - [x] 4.2 Implement sim-time timeout, configurable wall-clock watchdog, exit-code documentation, and infrastructure-versus-behavior failure classification; verify goal completion, timeout, launch failure, and watchdog cases produce distinct statuses.
 - [x] 4.3 Implement signal-safe process-group cleanup for normal exit, crash, and Ctrl-C; verify an interrupted test run leaves no episode-owned child processes.
 - [x] 4.4 Implement the versioned result bundle containing scenario, world, result, versions, timings, achieved real-time factor, logs, and optional rosbag; verify required files are present even after a simulator failure.
 
 ## 5. Baseline and oracle
 
-- [ ] 5.1 Implement repeated unfuzzed baseline calibration and explainable threshold derivation with a baseline/world/mission identity; verify `envfuzz baseline --n 10` writes distributions and thresholds.
+- [x] 5.1 Implement repeated unfuzzed baseline calibration and explainable threshold derivation with a baseline/world/mission identity; verify `envfuzz baseline --n 10` writes distributions and thresholds.
 - [x] 5.2 Implement explicit SLAM-to-world frame alignment and normalized pose recording; verify synthetic transforms and different map origins produce correct aligned errors.
 - [x] 5.3 Implement the common detector interface and T1 stuck detector with baseline-completion gating; verify synthetic traces cover positive, negative, and boundary cases.
 - [x] 5.4 Implement the T2 pose-error and T4 restricted-area detectors; verify synthetic traces cover duration thresholds, polygon entry, event intervals, and no-event cases.
@@ -44,6 +44,6 @@
 ## 7. Verification and documentation
 
 - [x] 7.1 Add simulator-free unit coverage for schema, compiler, validity, result contracts, and detectors; verify `make test` completes in under 30 seconds without a simulator.
-- [ ] 7.2 Add the marked short container integration smoke test and `make test-integration`; verify it runs one tiny-world episode and checks the result bundle.
+- [x] 7.2 Add the marked short container integration smoke test and `make test-integration`; verify it runs one tiny-world episode and checks the result bundle.
 - [x] 7.3 Write the CPU-only quickstart, CLI reference, exit statuses, threshold configuration, image size/build-time measurements, and troubleshooting guidance; verify a fresh checkout can follow the documented `fuzz --budget 20` flow.
-- [ ] 7.4 Run the full Phase 1 acceptance checklist and record any environment-specific limitations; verify the critical path and all Phase 1 smoke tests pass.
+- [x] 7.4 Run the full Phase 1 acceptance checklist and record any environment-specific limitations; verify the critical path and all Phase 1 smoke tests pass.

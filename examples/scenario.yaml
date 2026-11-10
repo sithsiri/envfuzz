@@ -1,0 +1,11 @@
+version: "1"
+seed: 42
+start: {x: 0.0, y: 0.0, yaw: 0.0}
+goals:
+  - {x: 2.0, y: 0.0, yaw: 0.0}
+objects:
+  - id: table
+    shape: box
+    pose: {x: 2.0, y: 2.0, yaw: 0.0}
+    size: {x: 1.0, y: 0.6, z: 0.8}
+

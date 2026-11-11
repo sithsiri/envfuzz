@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "position_threshold_m": 0.1,
+  "fixtures": [
+    {
+      "id": "matched-observations",
+      "expected_tiers": [],
+      "observations": [
+        {"time_s": 0, "truth_x_m": 0, "estimate_x_m": 0},
+        {"time_s": 0.25, "truth_x_m": 0.05, "estimate_x_m": 0.05},
+        {"time_s": 0.5, "truth_x_m": 0.1, "estimate_x_m": 0.1},
+        {"time_s": 0.75, "truth_x_m": 0.15, "estimate_x_m": 0.15},
+        {"time_s": 1, "truth_x_m": 0.2, "estimate_x_m": 0.2}
+      ]
+    },
+    {
+      "id": "persistent-estimate-disagreement",
+      "expected_tiers": ["T2"],
+      "observations": [
+        {"time_s": 0, "truth_x_m": 0, "estimate_x_m": 0.2},
+        {"time_s": 0.25, "truth_x_m": 0.05, "estimate_x_m": 0.25},
+        {"time_s": 0.5, "truth_x_m": 0.1, "estimate_x_m": 0.3},
+        {"time_s": 0.75, "truth_x_m": 0.15, "estimate_x_m": 0.35},
+        {"time_s": 1, "truth_x_m": 0.2, "estimate_x_m": 0.4}
+      ]
+    },
+    {
+      "id": "missing-observation-breaks-continuity",
+      "expected_tiers": [],
+      "observations": [
+        {"time_s": 0, "truth_x_m": 0, "estimate_x_m": 0.2},
+        {"time_s": 0.25, "truth_x_m": 0.05, "estimate_x_m": 0.25},
+        {"time_s": 0.5, "truth_x_m": 0.1, "estimate_x_m": null},
+        {"time_s": 0.75, "truth_x_m": 0.15, "estimate_x_m": 0.35},
+        {"time_s": 1, "truth_x_m": 0.2, "estimate_x_m": 0.4}
+      ]
+    }
+  ]
+}

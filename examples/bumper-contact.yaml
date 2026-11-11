@@ -1,0 +1,9 @@
+version: "1"
+start: {x: 0, y: 0}
+goals:
+  - {x: 4, y: 0}
+objects:
+  - id: low_threshold
+    shape: box
+    pose: {x: 1.4, y: 0}
+    size: {x: 0.14, y: 1, z: 0.06}

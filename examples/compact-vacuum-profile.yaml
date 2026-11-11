@@ -1,0 +1,8 @@
+version: 1
+robot_model: compact_vacuum
+navigation_backend: slam_toolbox
+record_contacts: true
+lidar_fov_deg: 270
+lidar_hz: 8
+lidar_rays: 360
+lidar_noise_m: 0.005

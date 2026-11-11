@@ -1,0 +1,15 @@
+version: "2"
+start: {x: 0, y: 0}
+goals:
+  - {x: 0, y: 3}
+objects:
+  - id: panel
+    shape: box
+    pose: {x: 2, y: 0}
+    size: {x: 0.06, y: 0.8, z: 1}
+    material: transparent
+  - id: backing
+    shape: box
+    pose: {x: 3, y: 0}
+    size: {x: 0.06, y: 1, z: 1}
+    material: reflective

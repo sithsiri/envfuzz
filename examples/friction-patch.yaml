@@ -1,0 +1,6 @@
+version: "2"
+start: {x: 0, y: 0}
+goals:
+  - {x: 2, y: 0}
+floor_patches:
+  - {min_x: -0.7, max_x: 0.8, min_y: -0.7, max_y: 0.7, friction: 0}

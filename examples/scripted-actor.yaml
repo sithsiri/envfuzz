@@ -1,0 +1,17 @@
+version: "2"
+start: {x: 0, y: 0}
+goals:
+  - {x: 4, y: 0}
+objects:
+  - id: walker
+    shape: cylinder
+    pose: {x: 2, y: 1.5}
+    radius: 0.2
+    height: 1.5
+actors:
+  - object_id: walker
+    keyframes:
+      - at: 3
+        pose: {x: 2, y: 1.5}
+      - at: 4
+        pose: {x: 2, y: 2.5}

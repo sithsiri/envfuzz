@@ -67,6 +67,7 @@ def reference_grid(
         obj for obj in scenario.objects
         if lidar_height is None or (obj.size.z if obj.shape == "box" else obj.height) >= lidar_height
     ]
+    drops = (scenario.floor_drops or []) if lidar_height is None else []
     margin = radius + resolution / math.sqrt(2) if radius else 0
     data = []
     for j in range(height):
@@ -75,6 +76,8 @@ def reference_grid(
             x = origin.x + (i + 0.5) * resolution
             wall = min(x - min_x, max_x - x, y - min_y, max_y - y)
             blocked = wall < margin or any(distance_to_obstacle(x, y, obj) <= margin for obj in obstacles)
+            if not blocked:
+                blocked = any(drop.distance(x, y) <= margin for drop in drops)
             data.append(100 if blocked else 0)
     return Grid(width=width, height=height, resolution=resolution, origin=origin, data=data)
 

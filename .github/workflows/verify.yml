@@ -1,0 +1,66 @@
+name: Verify EnvFuzz
+'on':
+  push:
+  pull_request:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e '.[test]' coverage
+      - run: make lint
+      - run: |
+          python -m coverage run --source=envfuzz -m pytest -m 'not integration'
+          python -m coverage report
+          python -m coverage xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-coverage
+          path: coverage.xml
+  headless:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        if: github.event_name == 'schedule'
+        with:
+          python-version: '3.12'
+      - run: mkdir -p runs/ci
+      - name: Build CPU runtime
+        run: docker build --progress plain -t envfuzz:ci . 2>&1 | tee runs/ci/build.log
+      - name: Headless integration
+        run: |
+          docker run --rm --network none --cpus 2 --memory 3g \
+            -v "$PWD/runs/ci:/verification" --entrypoint bash envfuzz:ci -c '
+              source /opt/ros/jazzy/setup.bash && source /opt/envfuzz-sim/local_setup.bash &&
+              unset DISPLAY &&
+              ENVFUZZ_GAZEBO_TEST=1 python -m pytest -m integration --basetemp /verification/pytest
+            ' 2>&1 | tee runs/ci/integration.log
+      - name: Nightly campaign and replay diagnostics
+        if: github.event_name == 'schedule'
+        run: |
+          python -m pip install -e .
+          envfuzz campaign examples/phase2-campaign.yaml --workers 2 --image envfuzz:ci --output runs/ci/pilot
+          envfuzz analyze runs/ci/pilot --replays 3 --workers 2 --image envfuzz:ci
+          python docker/check_replay.py runs/ci/pilot --minimum-real-time-factor 0.1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: headless-evidence
+          path: runs/ci

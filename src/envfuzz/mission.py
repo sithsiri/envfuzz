@@ -6,6 +6,7 @@ from collections import deque
 from dataclasses import asdict, dataclass
 import json
 import math
+import os
 from pathlib import Path
 import shutil
 import signal
@@ -25,8 +26,11 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.time import Time
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import Imu, LaserScan
 from tf2_ros import Buffer, TransformException, TransformListener
+
+CONTACT_GAP_S = 0.1
+CLIFF_RANGE_M = 0.20
 
 
 @dataclass(frozen=True)
@@ -45,7 +49,10 @@ def yaw(rotation) -> float:
 
 
 class Mission(Node):
-    def __init__(self, output: Path, record_scans: bool = False):
+    def __init__(
+        self, output: Path, record_scans: bool = False, record_contacts: bool = False,
+        record_cliff: bool = False, record_motion: bool = False,
+    ):
         super().__init__("envfuzz_mission", parameter_overrides=[Parameter("use_sim_time", value=True)])
         self.client = ActionClient(self, NavigateToPose, "/navigate_to_pose")
         self.lifecycle = self.create_client(GetState, "/bt_navigator/get_state")
@@ -73,6 +80,72 @@ class Mission(Node):
         if record_scans:
             self.scans = (output / "scans.jsonl").open("w", encoding="utf-8", buffering=1)
             self.create_subscription(LaserScan, "/scan", self.record_scan, qos_profile_sensor_data)
+
+        self.contacts = None
+        self.contact_seen: dict[tuple[int, int], float] = {}
+        if record_contacts:
+            from ros_gz_interfaces.msg import Contacts
+
+            self.contacts = (output / "contacts.jsonl").open("w", encoding="utf-8", buffering=1)
+            self.create_subscription(Contacts, "/envfuzz/bumper", self.record_contact, qos_profile_sensor_data)
+
+        self.cliff = None
+        self.cliff_detected = False
+        if record_cliff:
+            self.cliff = (output / "cliff.jsonl").open("w", encoding="utf-8", buffering=1)
+            self.create_subscription(LaserScan, "/envfuzz/cliff", self.record_cliff, qos_profile_sensor_data)
+        self.motion = None
+        if record_motion:
+            self.motion = (output / "motion.jsonl").open("w", encoding="utf-8", buffering=1)
+            self.create_subscription(Imu, "/imu", self.record_imu, qos_profile_sensor_data)
+            self.create_subscription(Odometry, "/odom", self.record_wheel_odom, qos_profile_sensor_data)
+
+    def record_cliff(self, message: LaserScan) -> None:
+        distance = min((value for value in message.ranges if math.isfinite(value)), default=None)
+        detected = distance is None or distance >= CLIFF_RANGE_M
+        if detected != self.cliff_detected:
+            self.cliff_detected = detected
+            self.cliff.write(json.dumps({
+                "kind": "cliff",
+                "sim_time": Time.from_msg(message.header.stamp).nanoseconds / 1e9,
+                "detected": detected,
+                "range_m": distance,
+            }) + "\n")
+
+    def record_imu(self, message: Imu) -> None:
+        acceleration = message.linear_acceleration
+        angular = message.angular_velocity
+        self.motion.write(json.dumps({
+            "kind": "imu",
+            "sim_time": Time.from_msg(message.header.stamp).nanoseconds / 1e9,
+            "acceleration": [acceleration.x, acceleration.y, acceleration.z],
+            "angular_velocity": [angular.x, angular.y, angular.z],
+        }) + "\n")
+
+    def record_wheel_odom(self, message: Odometry) -> None:
+        pose = message.pose.pose
+        self.motion.write(json.dumps({
+            "kind": "wheel_odometry",
+            "sim_time": Time.from_msg(message.header.stamp).nanoseconds / 1e9,
+            "x": pose.position.x,
+            "y": pose.position.y,
+            "yaw": yaw(pose.orientation),
+        }) + "\n")
+
+    def record_contact(self, message) -> None:
+        stamp = Time.from_msg(message.header.stamp).nanoseconds / 1e9
+        for contact in message.contacts:
+            left, right = sorted((contact.collision1, contact.collision2), key=lambda entity: entity.id)
+            pair = (left.id, right.id)
+            previous = self.contact_seen.get(pair)
+            self.contact_seen[pair] = stamp
+            if previous is not None and stamp - previous <= CONTACT_GAP_S:
+                continue
+            self.contacts.write(json.dumps({
+                "kind": "bumper_contact",
+                "sim_time": stamp,
+                "collisions": [{"id": entity.id, "name": entity.name} for entity in (left, right)],
+            }) + "\n")
 
     def record(self, message: Odometry) -> None:
         pose = message.pose.pose
@@ -128,6 +201,8 @@ class Mission(Node):
         stamp = Time.from_msg(message.header.stamp)
         self.scans.write(json.dumps({
             "sim_time": stamp.nanoseconds / 1e9,
+            "angle_min": message.angle_min,
+            "angle_increment": message.angle_increment,
             "ranges": [value if math.isfinite(value) else None for value in message.ranges],
         }) + "\n")
 
@@ -259,7 +334,12 @@ def main() -> None:
         shutil.copyfile(nav2 / "params" / "nav2_params.yaml", params)
     command.append(f"params_file:={params}")
     rclpy.init(args=[])
-    mission = Mission(output, record_scans=bool(scenario.get("events")))
+    mission = Mission(
+        output, record_scans=bool(scenario.get("events") or scenario.get("actors")),
+        record_contacts=os.environ.get("ENVFUZZ_RECORD_CONTACTS") == "1",
+        record_cliff=os.environ.get("ENVFUZZ_RECORD_CLIFF") == "1",
+        record_motion=os.environ.get("ENVFUZZ_RECORD_MOTION") == "1",
+    )
     try:
         with subprocess.Popen(command) as launch:
             try:
@@ -273,6 +353,9 @@ def main() -> None:
         mission.telemetry.close()
         if mission.scans is not None:
             mission.scans.close()
+        for stream in (mission.contacts, mission.cliff, mission.motion):
+            if stream is not None:
+                stream.close()
         mission.destroy_node()
         rclpy.try_shutdown()
 

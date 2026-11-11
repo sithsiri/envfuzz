@@ -34,3 +34,8 @@ startup and teardown.
 [Gazebo simulation pause and step control](https://gazebosim.org/api/sim/9/pause_run_simulation.html)
 and [Nav2 action acknowledgement settings](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/core_servers/configuring_bt_navigator/)
 describe the interfaces exercised in these checks.
+
+## Phase 3 follow-up
+
+The frozen pilot and replay of the original regression representatives are
+documented in the [Phase 3 verification record](../phase-3-verification.md).

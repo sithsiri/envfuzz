@@ -10,11 +10,15 @@ from typing import Any, Literal
 from xml.etree import ElementTree as ET
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .materials import Material, SURFACES
 from .profile import SimulationProfile
 
 SUPPORTED_VERSION = "1"
+MAX_TIMELINE_MOVES = 1000
+ACTOR_STEP_NS = 100_000_000
+ACTOR_STEP_M = 0.1
 
 
 class Pose(BaseModel):
@@ -39,6 +43,7 @@ class ScenarioObject(BaseModel):
     size: Size | None = Field(default=None, validate_default=True)
     radius: float | None = Field(default=None, gt=0, validate_default=True)
     height: float = Field(default=1.0, gt=0)
+    material: Material | None = None
 
     @field_validator("size")
     @classmethod
@@ -68,6 +73,51 @@ class TimedMove(BaseModel):
     pose: Pose
 
 
+class ActorKeyframe(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    at: float = Field(gt=0, le=3600)
+    pose: Pose
+
+
+class ScriptedActor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    object_id: str
+    keyframes: list[ActorKeyframe] = Field(min_length=1, max_length=MAX_TIMELINE_MOVES)
+
+
+class FloorRegion(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    min_x: float
+    max_x: float
+    min_y: float
+    max_y: float
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> FloorRegion:
+        if self.min_x >= self.max_x or self.min_y >= self.max_y:
+            raise ValueError("Floor region bounds must be increasing")
+        return self
+
+    def distance(self, x: float, y: float) -> float:
+        return math.hypot(max(self.min_x - x, 0, x - self.max_x),
+                          max(self.min_y - y, 0, y - self.max_y))
+
+    def overlaps(self, other: FloorRegion) -> bool:
+        return (max(self.min_x, other.min_x) < min(self.max_x, other.max_x)
+                and max(self.min_y, other.min_y) < min(self.max_y, other.max_y))
+
+
+class FloorDrop(FloorRegion):
+    depth_m: float = Field(ge=0.05, le=2.0)
+
+
+class FloorPatch(FloorRegion):
+    friction: float = Field(ge=0, le=2)
+
+
 class Scenario(BaseModel):
     model_config = ConfigDict(extra="forbid")
     version: str = SUPPORTED_VERSION
@@ -80,8 +130,11 @@ class Scenario(BaseModel):
     world: dict[str, float] = Field(
         default_factory=lambda: {"min_x": -5.0, "max_x": 5.0, "min_y": -5.0, "max_y": 5.0}
     )
-    events: list[TimedMove] | None = Field(default=None, max_length=1000)
+    events: list[TimedMove] | None = Field(default=None, max_length=MAX_TIMELINE_MOVES)
     surface_friction: dict[str, float] | None = None
+    actors: list[ScriptedActor] | None = Field(default=None, max_length=MAX_TIMELINE_MOVES)
+    floor_drops: list[FloorDrop] | None = Field(default=None, max_length=8)
+    floor_patches: list[FloorPatch] | None = Field(default=None, max_length=8)
 
     @field_validator("version")
     @classmethod
@@ -90,7 +143,7 @@ class Scenario(BaseModel):
             raise ValueError(f"unsupported scenario version: {value}")
         return value
 
-    @field_validator("events", "surface_friction")
+    @field_validator("events", "surface_friction", "actors", "floor_drops", "floor_patches")
     @classmethod
     def versioned_variants(cls, value, info: Any):
         if value is not None and info.data.get("version") != "2":
@@ -150,6 +203,55 @@ def _bounds(obj: ScenarioObject) -> tuple[float, float, float, float]:
     return (obj.pose.x - half_x, obj.pose.x + half_x, obj.pose.y - half_y, obj.pose.y + half_y)
 
 
+def timeline_moves(scenario: Scenario) -> list[TimedMove]:
+    """Expand actor paths into bounded updates for the existing timeline plugin."""
+    moves = list(scenario.events or ())
+    if not scenario.actors:
+        return moves
+
+    objects = {obj.id: obj for obj in scenario.objects}
+    edited = {move.object_id for move in moves}
+    actor_ids: set[str] = set()
+    for actor in scenario.actors:
+        actor_id = actor.object_id
+        if actor_id not in objects:
+            raise ValueError(f"actor {actor_id}: unknown object")
+        if actor_id in edited or actor_id in actor_ids:
+            raise ValueError(f"actor {actor_id}: conflicting timeline tracks")
+        actor_ids.add(actor_id)
+        start = objects[actor_id].pose
+        start_ns = 0
+        for frame in actor.keyframes:
+            end_ns = round(frame.at * 1e9)
+            elapsed = end_ns - start_ns
+            if elapsed <= 0:
+                raise ValueError(f"actor {actor_id}: keyframe times must increase")
+            remaining = MAX_TIMELINE_MOVES - len(moves)
+            distance = math.hypot(frame.pose.x - start.x, frame.pose.y - start.y)
+            if distance > remaining * ACTOR_STEP_M:
+                raise ValueError("actor paths and events exceed the timeline move limit")
+            steps = max(
+                (elapsed + ACTOR_STEP_NS - 1) // ACTOR_STEP_NS,
+                math.ceil(distance / ACTOR_STEP_M),
+            )
+            if steps > remaining:
+                raise ValueError("actor paths and events exceed the timeline move limit")
+            if steps > elapsed:
+                raise ValueError(f"actor {actor_id}: keyframes are too close in time")
+            delta_yaw = math.remainder(frame.pose.yaw - start.yaw, math.tau)
+            for step in range(1, steps + 1):
+                stamp = start_ns + elapsed * step // steps
+                fraction = (stamp - start_ns) / elapsed
+                pose = frame.pose if step == steps else Pose(
+                    x=start.x + (frame.pose.x - start.x) * fraction,
+                    y=start.y + (frame.pose.y - start.y) * fraction,
+                    yaw=start.yaw + delta_yaw * fraction,
+                )
+                moves.append(TimedMove(at=stamp / 1e9, object_id=actor_id, pose=pose))
+            start, start_ns = frame.pose, end_ns
+    return sorted(moves, key=lambda move: move.at)
+
+
 def validate_scenario(scenario: Scenario, clearance: float = 0.35) -> list[str]:
     violations: list[str] = []
     world = scenario.world
@@ -162,6 +264,14 @@ def validate_scenario(scenario: Scenario, clearance: float = 0.35) -> list[str]:
             violations.append(f"world: min_{axis} and max_{axis} must be finite and increasing")
     if violations:
         return violations
+    drops = scenario.floor_drops or []
+    regions = [*drops, *(scenario.floor_patches or [])]
+    for index, region in enumerate(regions, 1):
+        if not (world["min_x"] <= region.min_x < region.max_x <= world["max_x"]
+                and world["min_y"] <= region.min_y < region.max_y <= world["max_y"]):
+            violations.append(f"floor region {index}: exceeds world bounds")
+        if any(region.overlaps(earlier) for earlier in regions[:index - 1]):
+            violations.append(f"floor region {index}: overlaps an earlier region")
     mission_poses = [("start", scenario.start)]
     mission_poses.extend((f"goal {index}", goal) for index, goal in enumerate(scenario.goals, 1))
     for name, pose in mission_poses:
@@ -170,7 +280,13 @@ def validate_scenario(scenario: Scenario, clearance: float = 0.35) -> list[str]:
             and world["min_y"] + clearance <= pose.y <= world["max_y"] - clearance
         ):
             violations.append(f"{name}: violates wall clearance")
+        if any(drop.distance(pose.x, pose.y) < clearance for drop in drops):
+            violations.append(f"{name}: violates floor drop clearance")
     for obj in scenario.objects:
+        if obj.material is not None and scenario.version != "2":
+            violations.append(f"{obj.id}: surface material requires scenario version 2")
+        if any(drop.distance(obj.pose.x, obj.pose.y) < _radius(obj) for drop in drops):
+            violations.append(f"{obj.id}: overlaps a floor drop")
         min_x, max_x, min_y, max_y = _bounds(obj)
         if min_x < world["min_x"] or max_x > world["max_x"] or min_y < world["min_y"] or max_y > world["max_y"]:
             violations.append(f"{obj.id}: object exceeds world bounds")
@@ -195,19 +311,32 @@ def validate_scenario(scenario: Scenario, clearance: float = 0.35) -> list[str]:
         if unreachable is not None:
             label = f"goal {unreachable}" if unreachable else "start"
             violations.append(f"{label}: no route with robot footprint clearance")
-    if not violations and scenario.events:
-        objects = {obj.id: obj for obj in scenario.objects}
-        previous = -1.0
-        for index, event in enumerate(scenario.events, 1):
-            if event.at < previous or event.object_id not in objects:
-                violations.append(f"event {index}: order or object reference is invalid")
-                break
-            previous = event.at
-            objects[event.object_id] = objects[event.object_id].model_copy(update={"pose": event.pose})
-            variant = scenario.model_copy(update={"objects": list(objects.values()), "events": None})
-            violations.extend(f"event {index}: {issue}" for issue in validate_scenario(variant, clearance))
-            if violations:
-                break
+    if violations:
+        return violations
+    if scenario.events and any(
+        later.at < earlier.at for earlier, later in zip(scenario.events, scenario.events[1:])
+    ):
+        return ["event order is invalid"]
+    try:
+        moves = timeline_moves(scenario)
+    except ValueError as error:
+        return [str(error)]
+    objects = {obj.id: obj for obj in scenario.objects}
+    actor_ids = {actor.object_id for actor in scenario.actors or ()}
+    for index, event in enumerate(moves, 1):
+        if event.object_id not in objects:
+            return [f"event {index}: object reference is invalid"]
+        objects[event.object_id] = objects[event.object_id].model_copy(update={"pose": event.pose})
+        variant = scenario.model_copy(update={
+            "objects": list(objects.values()), "events": None, "actors": None,
+        })
+        context = (
+            f"actor {event.object_id} at {event.at:g} s"
+            if event.object_id in actor_ids else f"event {index}"
+        )
+        violations.extend(f"{context}: {issue}" for issue in validate_scenario(variant, clearance))
+        if violations:
+            break
     return violations
 
 
@@ -245,6 +374,11 @@ def compile_sdf(scenario: Scenario, profile: SimulationProfile | None = None) ->
         if system == "sensors":
             ET.SubElement(plugin, "render_engine").text = "ogre2"
 
+    if profile is not None and profile.record_contacts:
+        ET.SubElement(
+            world, "plugin", filename="gz-sim-contact-system", name="gz::sim::systems::Contact",
+        )
+
     bounds = scenario.world
     min_x, max_x = bounds["min_x"], bounds["max_x"]
     min_y, max_y = bounds["min_y"], bounds["max_y"]
@@ -252,8 +386,15 @@ def compile_sdf(scenario: Scenario, profile: SimulationProfile | None = None) ->
     center_x, center_y = min_x + width / 2, min_y + depth / 2
     thickness, wall_height = 0.1, 2.5
     margin = thickness / 2
+    floor_bounds = (min_x - thickness, max_x + thickness, min_y - thickness, max_y + thickness)
+    if scenario.floor_drops or scenario.floor_patches:
+        _add_floor(world, scenario, floor_bounds, thickness)
+    else:
+        _add_static_model(
+            world, "floor", (center_x, center_y, -margin, 0, 0, 0), "box",
+            {"size": _numbers((width + 2 * thickness, depth + 2 * thickness, thickness))},
+        )
     room_boxes = (
-        ("floor", (center_x, center_y, -margin), (width + 2 * thickness, depth + 2 * thickness, thickness)),
         ("wall_west", (min_x - margin, center_y, wall_height / 2), (thickness, depth, wall_height)),
         ("wall_east", (max_x + margin, center_y, wall_height / 2), (thickness, depth, wall_height)),
         ("wall_south", (center_x, min_y - margin, wall_height / 2), (width + 2 * thickness, thickness, wall_height)),
@@ -272,12 +413,15 @@ def compile_sdf(scenario: Scenario, profile: SimulationProfile | None = None) ->
             height = obj.height
             dimensions = {"radius": str(obj.radius), "length": str(height)}
         pose = (obj.pose.x, obj.pose.y, height / 2, 0, 0, obj.pose.yaw)
-        _add_static_model(world, f"obstacle_{obj.id}", pose, obj.shape, dimensions)
+        _add_static_model(
+            world, f"obstacle_{obj.id}", pose, obj.shape, dimensions, material=obj.material,
+        )
 
-    if scenario.events:
+    moves = timeline_moves(scenario)
+    if moves:
         plugin = ET.SubElement(world, "plugin", filename="libenvfuzz_timeline.so", name="envfuzz::Timeline")
         heights = {obj.id: (obj.size.z if obj.shape == "box" else obj.height) for obj in scenario.objects}
-        for index, event in enumerate(scenario.events, 1):
+        for index, event in enumerate(moves, 1):
             move = ET.SubElement(plugin, "move")
             ET.SubElement(move, "index").text = str(index)
             ET.SubElement(move, "nanoseconds").text = str(round(event.at * 1e9))
@@ -290,13 +434,32 @@ def compile_sdf(scenario: Scenario, profile: SimulationProfile | None = None) ->
     return '<?xml version="1.0" ?>\n' + ET.tostring(sdf, encoding="unicode") + "\n"
 
 
+def _add_floor(world: ET.Element, scenario: Scenario, bounds: tuple[float, ...], thickness: float) -> None:
+    regions = [*(scenario.floor_drops or []), *(scenario.floor_patches or [])]
+    xs = sorted({bounds[0], bounds[1], *(edge for region in regions for edge in (region.min_x, region.max_x))})
+    ys = sorted({bounds[2], bounds[3], *(edge for region in regions for edge in (region.min_y, region.max_y))})
+    for i, (left, right) in enumerate(zip(xs, xs[1:])):
+        for j, (bottom, top) in enumerate(zip(ys, ys[1:])):
+            center_x, center_y = (left + right) / 2, (bottom + top) / 2
+            region = next((item for item in regions if item.distance(center_x, center_y) == 0), None)
+            depth = region.depth_m if isinstance(region, FloorDrop) else 0
+            friction = region.friction if isinstance(region, FloorPatch) else None
+            _add_static_model(
+                world, f"floor_{i}_{j}" if regions else "floor",
+                (center_x, center_y, -thickness / 2 - depth, 0, 0, 0), "box",
+                {"size": _numbers((right - left, top - bottom, thickness))},
+                friction=friction,
+            )
+
+
 def _numbers(values: tuple[float, ...]) -> str:
     return " ".join(str(value) for value in values)
 
 
 def _add_static_model(
     world: ET.Element, name: str, pose: tuple[float, ...],
-    shape: str, dimensions: dict[str, str],
+    shape: str, dimensions: dict[str, str], *, friction: float | None = None,
+    material: Material | None = None,
 ) -> None:
     model = ET.SubElement(world, "model", name=name)
     ET.SubElement(model, "static").text = "true"
@@ -305,6 +468,16 @@ def _add_static_model(
     # Rendering-based LiDAR sees visuals while physics uses collision geometry.
     for kind in ("collision", "visual"):
         element = ET.SubElement(link, kind, name=kind)
+        if kind == "visual" and material is not None:
+            surface = SURFACES[material]
+            ET.SubElement(element, "laser_retro").text = str(surface.intensity)
+            if surface.transmits:
+                ET.SubElement(element, "transparency").text = "0.95"
+        if kind == "collision" and friction is not None:
+            surface = ET.SubElement(element, "surface")
+            ode = ET.SubElement(ET.SubElement(surface, "friction"), "ode")
+            ET.SubElement(ode, "mu").text = str(friction)
+            ET.SubElement(ode, "mu2").text = str(friction)
         geometry = ET.SubElement(ET.SubElement(element, "geometry"), shape)
         for dimension, value in dimensions.items():
             ET.SubElement(geometry, dimension).text = value

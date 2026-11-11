@@ -1,0 +1,71 @@
+name: Release images
+'on':
+  release:
+    types: [published]
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  architecture:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    env:
+      RELEASE_VERSION: ${{ github.event.release.tag_name }}
+      IMAGE_ARCH: ${{ matrix.architecture }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build and verify native image
+        run: |
+          mkdir -p release-evidence
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:$RELEASE_VERSION-$IMAGE_ARCH"
+          docker build --platform "linux/$IMAGE_ARCH" --tag "$image" \
+            --label "org.opencontainers.image.version=$RELEASE_VERSION" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" .
+          docker run --rm --network none "$image" doctor > release-evidence/versions.json
+          docker run --rm --network none --cpus 2 --memory 3g \
+            -v "$PWD/release-evidence:/verification" "$image" \
+            run examples/scenario.yaml --timeout 20 --watchdog 100 --output /verification/smoke
+      - name: Publish verified architecture
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker push "ghcr.io/${GITHUB_REPOSITORY,,}:$RELEASE_VERSION-$IMAGE_ARCH"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-evidence-${{ matrix.architecture }}
+          path: release-evidence
+  manifest:
+    needs: architecture
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      RELEASE_VERSION: ${{ github.event.release.tag_name }}
+      GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Publish multi-architecture manifest
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:$RELEASE_VERSION"
+          docker buildx imagetools create --tag "$image" "$image-amd64" "$image-arm64"
+          docker buildx imagetools inspect "$image"

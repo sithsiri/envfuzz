@@ -68,9 +68,30 @@ organizer controls the fixture, baseline, limits, and repeat count. Runs use
 a read-only root filesystem and input mount, no networking, a separate
 writable result mount, and CPU, memory, and wall-clock limits. The scoreboard
 ranks verified submissions by completed missions and then median simulated
-completion time. The report retains per-run evidence.
+completion time. The report retains per-run evidence. Keep organizer scenario,
+baseline, and configuration files in the directory containing the challenge
+manifest. Manifest file paths are relative to that directory.
 
 ## Verification
 
 The [Phase 2 verification record](phase-2-verification.md) includes the
 worker-scaling, timing, and classroom measurements.
+
+## Offline sensor observation checks
+
+Organizers can run the checked-in observation suite on the host without ROS or
+Docker.
+
+```sh
+envfuzz classroom check-sensor-fixtures examples/classroom/sensor-fixtures.json
+```
+
+The version 1 JSON format contains a position-error threshold in meters and
+fixtures with unique IDs, expected oracle tiers, and ordered observations.
+Each observation has a simulation timestamp, ground-truth position, and an
+estimated position or null for a missing observation. This fixture format uses
+one position axis and the existing T2 pose-error oracle. The report includes
+the suite's SHA-256 digest and observed tiers. A mismatch exits with status 2.
+
+Store fixture suites with the organizer's verification files. The classroom
+submission schema continues to accept only edits to the challenge scenario.

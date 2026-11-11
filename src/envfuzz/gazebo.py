@@ -17,10 +17,10 @@ from uuid import uuid4
 from .maps import save_map_comparison
 from .oracle import load_baseline, restricted_events
 from .oracle_config import load_oracle
-from .profile import load_profile
+from .profile import SimulationProfile, load_profile
 from .results import EpisodeResult, write_result_bundle
 from .runner import _terminate
-from .scenario import Scenario, compile_sdf
+from .scenario import Scenario, compile_sdf, timeline_moves
 from .scoring import apply_baseline, read_trace
 
 
@@ -43,17 +43,25 @@ def run_gazebo(
     output.mkdir(parents=True, exist_ok=False)
     (output / "world.sdf").write_text(world, encoding="utf-8")
     (output / "scenario.json").write_text(scenario.canonical_json(), encoding="utf-8")
-    config = {"backend": "gazebo", "timeout": timeout, "watchdog": watchdog}
+    resolved_profile = (profile or SimulationProfile()).resolved()
+    config = {"backend": "gazebo", "timeout": timeout, "watchdog": watchdog,
+              "simulation_profile": resolved_profile}
     if params_file is not None:
         shutil.copyfile(params_file, output / "nav2.yaml")
     if baseline_file is not None:
         shutil.copyfile(baseline_file, output / "baseline.json")
         (output / "oracle.yaml").write_text(oracle.model_dump_json(indent=2), encoding="utf-8")
     if profile is not None:
-        (output / "profile.yaml").write_text(profile.model_dump_json(indent=2), encoding="utf-8")
+        (output / "profile.yaml").write_text(profile.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
     environment = os.environ.copy()
     environment.pop("ENVFUZZ_LIDAR_HZ", None)
     environment.pop("ENVFUZZ_LIDAR_RAYS", None)
+    environment.pop("ENVFUZZ_LIDAR_FOV_DEG", None)
+    environment.pop("ENVFUZZ_LIDAR_NOISE_M", None)
+    environment["ENVFUZZ_ROBOT_MODEL"] = resolved_profile["robot_model"]
+    observation_flags = ("record_contacts", "record_cliff", "record_motion")
+    for flag in observation_flags:
+        environment.pop(f"ENVFUZZ_{flag.upper()}", None)
     environment.update(
         ROS_DOMAIN_ID=os.environ.get("ENVFUZZ_WORKER_DOMAIN", str(10 + secrets.randbelow(90))),
         ROS_AUTOMATIC_DISCOVERY_RANGE="LOCALHOST",
@@ -65,6 +73,13 @@ def run_gazebo(
     (output / "run.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     if profile is not None:
         environment.update(ENVFUZZ_LIDAR_HZ=str(profile.lidar_hz), ENVFUZZ_LIDAR_RAYS=str(profile.lidar_rays))
+        if profile.lidar_fov_deg is not None:
+            environment["ENVFUZZ_LIDAR_FOV_DEG"] = str(profile.lidar_fov_deg)
+        if profile.lidar_noise_m is not None:
+            environment["ENVFUZZ_LIDAR_NOISE_M"] = str(profile.lidar_noise_m)
+        for flag in observation_flags:
+            if getattr(profile, flag):
+                environment[f"ENVFUZZ_{flag.upper()}"] = "1"
     process = None
     started = time.monotonic()
     worker_result = output / "mission.json"
@@ -113,7 +128,8 @@ def run_gazebo(
 
 
 def _record_events(output: Path, scenario: Scenario) -> Scenario:
-    if not scenario.events:
+    moves = timeline_moves(scenario)
+    if not moves:
         return scenario
     log = (output / "logs.txt").read_text(encoding="utf-8", errors="replace")
     applied = {int(index): int(stamp) / 1e9 for index, stamp in re.findall(
@@ -123,9 +139,13 @@ def _record_events(output: Path, scenario: Scenario) -> Scenario:
         raise ValueError("Gazebo could not apply the scheduled environment edits")
     states = {obj.id: obj for obj in scenario.objects}
     records = []
-    for index, event in enumerate(scenario.events, 1):
-        records.append({"object_id": event.object_id, "requested_sim_time": event.at,
-                        "applied_sim_time": applied.get(index)})
+    actor_ids = {actor.object_id for actor in scenario.actors or ()}
+    for index, event in enumerate(moves, 1):
+        record = {"object_id": event.object_id, "requested_sim_time": event.at,
+                  "applied_sim_time": applied.get(index)}
+        if event.object_id in actor_ids:
+            record["pose"] = event.pose.model_dump()
+        records.append(record)
         if index in applied:
             states[event.object_id] = states[event.object_id].model_copy(update={"pose": event.pose})
     (output / "events-applied.json").write_text(json.dumps(records, indent=2), encoding="utf-8")

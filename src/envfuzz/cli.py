@@ -14,11 +14,13 @@ from .analysis import analyze_campaign, replay_corpus
 from .campaign import prepare_campaign, run_campaign, run_parallel_campaign
 from .campaign_index import render_campaign_report
 from .classroom import check_submission, evaluate_submission, write_scoreboard
+from .materials import reference_rays
 from .oracle import save_baseline
 from .report import render_diagnostics, render_report
 from .results import EpisodeResult, runtime_versions
 from .scenario import SCENARIO_JSON_SCHEMA, Scenario, compile_sdf, load_scenario, validate_scenario
 from .scoring import baseline_from_trials
+from .sensor_fixtures import check_sensor_fixtures
 from .fuzzer import fuzz
 from .gazebo import run_gazebo
 from .minimize import minimize_run
@@ -53,6 +55,21 @@ def compile_command(path: Path, output: Path = Path("world.sdf")) -> None:
     typer.echo(str(output))
 
 
+@app.command("surface-probe")
+def surface_probe(path: Path) -> None:
+    """Report fixed-angle reference rays for a static material fixture."""
+    try:
+        scenario = load_scenario(path)
+        violations = validate_scenario(scenario)
+        if violations:
+            raise ValueError("; ".join(violations))
+        if scenario.events or scenario.actors:
+            raise ValueError("A surface probe requires a static fixture")
+    except (OSError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(json.dumps(reference_rays(scenario, scenario.start, (-0.2, -0.1, 0.0, 0.1, 0.2)), indent=2))
+
+
 @app.command("doctor")
 def doctor() -> None:
     typer.echo(json.dumps(runtime_versions(), indent=2, sort_keys=True))
@@ -65,6 +82,17 @@ def classroom_check(manifest: Path, submission: Path) -> None:
     except (OSError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error
     typer.echo(f"Valid submission. Scenario {scenario.content_hash()}")
+
+
+@classroom_app.command("check-sensor-fixtures")
+def classroom_check_sensor_fixtures(fixtures: Path) -> None:
+    try:
+        report = check_sensor_fixtures(fixtures)
+    except (OSError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(json.dumps(report, indent=2))
+    if not report["passed"]:
+        raise typer.Exit(code=2)
 
 
 @classroom_app.command("evaluate")

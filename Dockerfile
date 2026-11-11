@@ -31,4 +31,6 @@ WORKDIR /workspace/envfuzz
 COPY . .
 RUN python3 -m pip install --no-build-isolation --no-deps .
 RUN bash -c '. /opt/ros/jazzy/setup.bash && colcon build --base-paths ros2_ws/src --install-base /opt/envfuzz-sim'
+RUN bash -c '. /opt/ros/jazzy/setup.bash && mkdir -p /usr/share/envfuzz \
+    && envfuzz doctor > /usr/share/envfuzz/versions.json'
 ENTRYPOINT ["/bin/bash", "-c", "unset DISPLAY; source /opt/ros/jazzy/setup.bash && source /opt/envfuzz-sim/local_setup.bash && exec envfuzz \"$@\"", "envfuzz"]

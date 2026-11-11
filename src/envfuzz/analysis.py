@@ -113,7 +113,9 @@ def replay_corpus(root: Path, output: Path, report: dict, repeats: int, workers:
                                     **files)
             results.append({"bundle": bundle.relative_to(root).as_posix(), "status": result.status,
                             "classification": result.classification,
-                            "matched": regression_signature(bundle, case["signature"][0]) == expected})
+                            "real_time_factor": result.real_time_factor,
+                            "matched": result.classification == "behavior" and expected is not None
+                            and regression_signature(bundle, case["signature"][0]) == expected})
         valid = sum(row["classification"] == "behavior" for row in results)
         matching = sum(row["matched"] for row in results)
         return {**case, "replays": results, "valid_replays": valid,

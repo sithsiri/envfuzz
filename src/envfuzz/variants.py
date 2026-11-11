@@ -8,9 +8,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .materials import Material, SURFACES
 from .scenario import Pose, Scenario, ScenarioObject, Size, validate_scenario
 
-Operator = Literal["move", "rotate", "scale", "add_clutter", "remove_clutter", "door"]
+Operator = Literal["move", "rotate", "scale", "add_clutter", "remove_clutter", "door", "material"]
 
 
 class Edit(BaseModel):
@@ -21,6 +22,7 @@ class Edit(BaseModel):
     value: float | None = None
     obstacle: ScenarioObject | None = None
     door_state: Literal["open", "closed"] | None = None
+    material: Material | None = None
 
 
 class EditBudget(BaseModel):
@@ -47,6 +49,8 @@ def apply_edits(base: Scenario, edits: list[Edit], budget: EditBudget) -> Scenar
         if edit.operator == "add_clutter":
             if existing is not None or edit.obstacle is None or edit.obstacle.id != edit.object_id:
                 raise ValueError(f"Edit {index}: clutter requires a unique matching object ID")
+            if edit.obstacle.material is not None and "material" not in budget.allowed:
+                raise ValueError(f"Edit {index}: material is outside the budget")
             objects[edit.object_id] = edit.obstacle
         elif existing is None:
             raise ValueError(f"Edit {index}: unknown object {edit.object_id}")
@@ -71,6 +75,8 @@ def apply_edits(base: Scenario, edits: list[Edit], budget: EditBudget) -> Scenar
             else:
                 update = {"radius": existing.radius * edit.value, "height": existing.height * edit.value}
             objects[edit.object_id] = existing.model_copy(update=update)
+        elif edit.operator == "material" and edit.material is not None:
+            objects[edit.object_id] = existing.model_copy(update={"material": edit.material})
         elif edit.operator == "door" and edit.door_state is not None:
             poses = base.challenge.get("doors", {}).get(edit.object_id, {})
             if edit.door_state not in poses:
@@ -104,3 +110,13 @@ def seeded_clutter_edit(base: Scenario, seed: int, object_id: str) -> Edit:
                   y=rng.uniform(world["min_y"], world["max_y"])),
     )
     return Edit(operator="add_clutter", object_id=object_id, obstacle=obstacle)
+
+
+def seeded_material_edit(base: Scenario, seed: int, object_id: str) -> Edit:
+    """Choose a passive material preset under the caller's existing edit budget."""
+    target = next((obj for obj in base.objects if obj.id == object_id), None)
+    if target is None:
+        raise ValueError(f"Unknown material edit target {object_id}")
+    rng = random.Random(seed)
+    choices = [material for material in SURFACES if material != (target.material or "opaque")]
+    return Edit(operator="material", object_id=object_id, material=rng.choice(choices))

@@ -101,9 +101,12 @@ envfuzz run examples/scenario.yaml --smoke --output runs/contract-check
 The smoke command checks scenario compilation and bundle writing with zero
 simulation time.
 
+- [Progress and verified successes](docs/progress.md) records the paused implementation state and measured results.
 - [Quickstart](docs/quickstart.md) covers Docker and native Ubuntu setup.
 - [CLI reference](docs/cli.md) lists commands and options.
 - [Simulation assets](docs/simulation-assets.md) describes the robot and ROS topics.
 - [Phase 1 verification](docs/phase-1-verification.md) records the tested environments and measured results.
 - [OpenSpec changes](openspec/changes/) track project requirements and implementation tasks.
 - [Phase 2 workflow](docs/phase-2.md) covers parallel runs, map diagnostics, and classroom evaluation.
+- [Classroom guide](docs/classroom-guide.md) covers participant submissions and organizer verification.
+- [CPU profiles](docs/phase-3-profiles.md) covers the default and compact robots.

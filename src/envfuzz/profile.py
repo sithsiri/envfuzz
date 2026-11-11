@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 RobotModel = Literal["turtlebot3_waffle", "compact_vacuum"]
-NavigationBackend = Literal["slam_toolbox", "rtabmap", "amcl"]
+NavigationBackend = Literal["slam_toolbox", "rtabmap", "rtabmap_lidar", "amcl"]
 
 
 class SimulationProfile(BaseModel):
@@ -35,6 +35,8 @@ class SimulationProfile(BaseModel):
     @model_validator(mode="after")
     def camera_requires_rtabmap(self) -> "SimulationProfile":
         backend = self.navigation_backend or "slam_toolbox"
+        if self.camera_profile and backend == "rtabmap_lidar":
+            raise ValueError("rtabmap_lidar is lidar-only; select navigation_backend=rtabmap for the camera profile")
         if self.camera_profile != (backend == "rtabmap"):
             raise ValueError("camera_profile and navigation_backend=rtabmap must be selected together")
         return self

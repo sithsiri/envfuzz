@@ -15,6 +15,40 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+# CPU lidar-only RTAB-Map, following rtabmap_demos turtlebot3_scan.launch.py (0.23.13):
+# 2D laser scans plus wheel odometry, ICP registration constrained to 3 DoF, no camera.
+RTABMAP_LIDAR_PARAMETERS = {
+    "frame_id": "base_footprint",
+    "subscribe_depth": False,
+    "subscribe_rgb": False,
+    "subscribe_scan": True,
+    "approx_sync": True,
+    "Reg/Strategy": "1",
+    "Reg/Force3DoF": "true",
+    "RGBD/NeighborLinkRefining": "True",
+    "Grid/RangeMin": "0.2",
+    "Optimizer/GravitySigma": "0",
+}
+
+
+def navigation_mode(backend: str | None, camera_profile: bool) -> dict[str, str]:
+    """Return the Nav2 bringup arguments that select SLAM Toolbox, AMCL or an external RTAB-Map map."""
+    if backend == "rtabmap_lidar":
+        return {"slam": "False", "use_localization": "False"}
+    if camera_profile or backend == "amcl":
+        return {"slam": "False"}
+    return {"slam": "True"}
+
+
+def rtabmap_lidar_node() -> Node:
+    """RTAB-Map publishes /map and map->odom from /scan and /odom for Nav2."""
+    return Node(
+        package="rtabmap_slam", executable="rtabmap", output="screen",
+        parameters=[{**RTABMAP_LIDAR_PARAMETERS, "use_sim_time": True}],
+        remappings=[("scan", "/scan"), ("odom", "/odom")],
+        arguments=["-d"],
+    )
+
 
 def _add_cliff_sensor(base_link: ET.Element) -> None:
     sensor = ET.SubElement(base_link, "sensor", name="envfuzz_cliff", type="gpu_lidar")
@@ -129,6 +163,7 @@ def generate_launch_description():
     record_contacts = os.environ.get("ENVFUZZ_RECORD_CONTACTS") == "1"
     record_cliff = os.environ.get("ENVFUZZ_RECORD_CLIFF") == "1"
     camera_profile = os.environ.get("ENVFUZZ_CAMERA_PROFILE") == "1"
+    backend = os.environ.get("ENVFUZZ_NAVIGATION_BACKEND")
     observation_bridges = []
     if record_contacts:
         observation_bridges.append(Node(
@@ -216,10 +251,11 @@ def generate_launch_description():
                 "delete_db_on_start": "true",
             }.items(),
         )] if camera_profile else []),
+        *([rtabmap_lidar_node()] if backend == "rtabmap_lidar" else []),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(nav2 / "launch" / "bringup_launch.py")),
             launch_arguments={
-                "slam": "False" if camera_profile or os.environ.get("ENVFUZZ_NAVIGATION_BACKEND") == "amcl" else "True",
+                **navigation_mode(backend, camera_profile),
                 "use_sim_time": "true",
                 "autostart": "true",
                 "use_composition": "False",

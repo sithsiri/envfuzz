@@ -108,5 +108,6 @@ simulation time.
 - [Phase 1 verification](docs/phase-1-verification.md) records the tested environments and measured results.
 - [OpenSpec changes](openspec/changes/) track project requirements and implementation tasks.
 - [Phase 2 workflow](docs/phase-2.md) covers parallel runs, map diagnostics, and classroom evaluation.
+- [Multi-host campaigns](docs/multi-host.md) covers durable worker claims, leases, and reconciliation.
 - [Classroom guide](docs/classroom-guide.md) covers participant submissions and organizer verification.
 - [CPU profiles](docs/phase-3-profiles.md) covers the default and compact robots.

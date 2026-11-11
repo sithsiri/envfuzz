@@ -17,6 +17,11 @@ def command(*arguments: str) -> str:
     return subprocess.check_output(["gz", *arguments], text=True, timeout=12)
 
 
+def iterations(text: str) -> int:
+    match = re.search(r"iterations: (\d+)", text)
+    return int(match[1]) if match else 0
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as directory:
         world = Path(directory) / "world.sdf"
@@ -36,7 +41,6 @@ def main() -> None:
                                 "--reptype", "gz.msgs.Boolean", "--timeout", "5000",
                                 "--req", "pause: true, multi_step: 20")
                 after = command("topic", "-e", "-t", "/world/envfuzz/stats", "-n", "1")
-                iterations = lambda text: int(match[1]) if (match := re.search(r"iterations: (\d+)", text)) else 0
                 result = {"step_reply": reply.strip(), "iterations_before": iterations(before),
                           "iterations_after": iterations(after), "wall_seconds": time.monotonic() - start,
                           "paused_after": "paused: true" in after}

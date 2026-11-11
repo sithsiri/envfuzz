@@ -5,14 +5,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import tempfile
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from pydantic import ValidationError
 
 from .analysis import analyze_campaign, replay_corpus
-from .campaign import prepare_campaign, run_campaign, run_durable_worker, run_parallel_campaign
+from .campaign import (
+    DEFAULT_MAX_CONSECUTIVE_FAILURES, WorkerHalted, join_campaign, prepare_campaign, reconcile_durable_campaign, reject_durable_ledger, run_campaign,
+    run_durable_worker, run_parallel_campaign,
+)
 from .campaign_index import render_campaign_report
+from .claims import ClaimStore, validate_worker_id
 from .classroom import check_submission, evaluate_submission, write_scoreboard
 from .materials import reference_rays
 from .oracle import save_baseline
@@ -302,6 +306,7 @@ def campaign_command(
     retries: int = typer.Option(2, min=0),
 ) -> None:
     try:
+        reject_durable_ledger(output)
         config, cases = prepare_campaign(manifest, output)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
@@ -323,6 +328,27 @@ def campaign_command(
         typer.echo(str(output / "results.csv"))
 
 
+@app.command("campaign-approve")
+def campaign_approve_command(
+    manifest: Path = typer.Argument(..., exists=True, dir_okay=False),
+    output: Path = typer.Option(...),
+    worker_id: List[str] = typer.Option(..., "--worker-id", help="Trusted worker ID; repeat per worker."),
+    retries: int = typer.Option(2, min=0, help="Retries per job after the first attempt."),
+) -> None:
+    """Freeze the plan, create the shared claim ledger, and approve trusted workers."""
+    try:
+        approved = [validate_worker_id(worker) for worker in worker_id]
+        store = ClaimStore(output)
+        store.check_can_create()
+        _, cases = prepare_campaign(manifest, output)
+        store.initialize(len(cases), retries=retries)
+        store.approve(approved)
+        listed = store.approved_workers()
+    except (OSError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(f"{len(cases)} cases, {retries} retries per job. Approved workers: {', '.join(listed)}")
+
+
 @app.command("campaign-worker")
 def campaign_worker_command(
     manifest: Path = typer.Argument(..., exists=True, dir_okay=False),
@@ -332,18 +358,42 @@ def campaign_worker_command(
     worker_cpus: float = typer.Option(2.0, min=0.1),
     worker_memory: str = typer.Option("1536m"),
     lease_s: float = typer.Option(600, min=1),
-    retries: int = typer.Option(2, min=0),
+    retries: Optional[int] = typer.Option(None, min=0, help="Must match the ledger; defaults to it."),
+    wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for live leases held by other workers."),
+    poll_s: float = typer.Option(10.0, min=0.1),
+    max_consecutive_failures: int = typer.Option(
+        DEFAULT_MAX_CONSECUTIVE_FAILURES, min=1,
+        help="Stop this worker after this many infrastructure failures in a row."),
 ) -> None:
-    """Run one trusted worker against a shared campaign directory."""
+    """Run one approved worker against a shared campaign directory without creating campaign files."""
     try:
-        config, cases = prepare_campaign(manifest, output)
+        config, cases = join_campaign(manifest, output)
         completed = run_durable_worker(
             config, cases, output, worker_id, WorkerLimits(image, worker_cpus, worker_memory),
-            lease_s=lease_s, retries=retries,
+            lease_s=lease_s, retries=retries, wait=wait, poll_s=poll_s,
+            max_consecutive_failures=max_consecutive_failures,
         )
+    except WorkerHalted as halted:
+        typer.echo(str(halted), err=True)
+        raise typer.Exit(code=2) from halted
     except (OSError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error
     typer.echo(f"{completed} authoritative results committed in {output}")
+
+
+@app.command("campaign-reconcile")
+def campaign_reconcile_command(output: Path = typer.Argument(..., exists=True, file_okay=False)) -> None:
+    """Write authoritative results.csv and the claims.json attempt audit for a durable campaign."""
+    try:
+        complete, report = reconcile_durable_campaign(output)
+    except (OSError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    counts = report["counts"]
+    typer.echo(f"{counts['completed']} of {report['cases']} cases have an authoritative result "
+               f"({counts['exhausted']} exhausted, {counts['claimed']} claimed, {counts['queued']} queued). "
+               f"{output / 'claims.json'}")
+    if not complete:
+        raise typer.Exit(code=2)
 
 
 @app.command("fuzz")

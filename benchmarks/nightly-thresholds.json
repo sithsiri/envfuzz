@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "note": "The only failing gate is the 0.1 end-to-end real-time-factor floor. It is a coarse alarm inherited from the earlier CI flag and was not derived from a measurement. Everything else is reported, not gated. Reference values were measured on Docker Desktop on ARM64 (two workers, two CPUs and 1536 MiB each), not on GitHub-hosted runners. Nothing yet compares one nightly run with another; each report lives only as long as its workflow artifact is retained.",
+  "metrics": {
+    "median_end_to_end_real_time_factor": {
+      "minimum": 0.1,
+      "reference": 0.42,
+      "source": "Floor: coarse alarm carried over from the earlier `check_replay.py --minimum-real-time-factor 0.1` CI flag (docs/releases.md); not derived from a measurement. Reference: docs/phase-3-verification.md frozen replay pilot, median 0.420x across 18 valid episodes (range 0.214x to 0.477x)."
+    },
+    "median_mission_real_time_factor": {
+      "objective_minimum": 5.0,
+      "reference": 0.66,
+      "source": "Reported only. Objective: Phase 2 5x speed target, tracked separately per design decision 5. Reference: docs/adr/0004-replay-timing.md reference mission at 0.66x."
+    },
+    "infrastructure_attempt_rate": {
+      "reference": 0.0526,
+      "source": "Reported only, not gated. Reference: docs/phase-3-verification.md, 1 infrastructure attempt across 19 pilot attempts (18 valid episodes)."
+    },
+    "episodes_per_minute": {
+      "source": "Reported only. No documented measurement; computed from the nightly campaign step's wall time."
+    },
+    "diagnostic_replay_agreement": {
+      "objective_minimum": 0.95,
+      "source": "Reported only. Agreement of tonight's diagnostic pilot corpus (fresh regressions, 3 replays each), a different population from the frozen fixtures gated by docker/check_replay.py. Objective: Phase 2 95% agreement target. No reference: the documented 0 of 17 figure was measured on the original Phase 2 representatives, not on this corpus."
+    }
+  }
+}

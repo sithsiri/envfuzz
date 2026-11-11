@@ -19,6 +19,7 @@
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>rtabmap_launch</exec_depend>
+  <exec_depend>rtabmap_slam</exec_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>
 

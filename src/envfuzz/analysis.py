@@ -4,15 +4,21 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 import json
 import math
 from pathlib import Path
+import re
+import sqlite3
 
-from .campaign_index import refresh_index
+from .campaign_index import INDEX_TIMEOUT_S, index_error, refresh_index
+from .claims import LEDGER_FILENAME, ClaimStore
 from .results import EpisodeResult
 from .scenario import load_scenario
 from .scoring import read_trace
 from .workers import WorkerLimits, run_worker
+
+ATTEMPT_FOLDER = re.compile(r"case-(\d+)/attempt-(\d+)")
 
 
 def regression_signature(bundle: Path, layout: str) -> tuple | None:
@@ -26,25 +32,55 @@ def regression_signature(bundle: Path, layout: str) -> tuple | None:
     return layout, result.status, map_error, terminal
 
 
-def analyze_campaign(root: Path, output: Path) -> dict:
-    import sqlite3
+def _durable_view(root: Path) -> dict:
+    """Summarize the claim ledger: authoritative attempts, duplicates, and uncommitted bundles."""
+    entries = ClaimStore(root).finished_attempts()
+    finished = {(case, record["attempt"]) for case, entry in entries.items() for record in entry["finished"]}
+    uncommitted = 0
+    for attempt in root.glob("case-*/attempt-*"):
+        match = ATTEMPT_FOLDER.fullmatch(f"{attempt.parent.name}/{attempt.name}")
+        if match is None:
+            continue
+        has_result = (attempt / "bundle" / "result.json").is_file() or (attempt / "result.json").is_file()
+        uncommitted += has_result and (int(match[1]), int(match[2])) not in finished
+    return {
+        "authoritative": {case: entry["authoritative_attempt"] for case, entry in entries.items()},
+        "duplicates": sum(record["classification"] == "behavior" and record["attempt"] != entry["authoritative_attempt"]
+                          for entry in entries.values() for record in entry["finished"]),
+        "uncommitted": uncommitted,
+    }
 
+
+def _index_rows(root: Path) -> list[tuple]:
+    try:
+        with closing(sqlite3.connect(root / "results.sqlite3", timeout=INDEX_TIMEOUT_S)) as database:
+            return database.execute(
+                "SELECT strategy, classification, status, bundle, layout, case_id, attempt FROM attempts "
+                "ORDER BY case_id, attempt"
+            ).fetchall()
+    except sqlite3.Error as error:
+        raise index_error(root, error) from error
+
+
+def analyze_campaign(root: Path, output: Path) -> dict:
+    # A durable campaign counts only the attempt its claim ledger made authoritative; its index
+    # holds only ledger-recorded attempts read from their hash-verified bundles.
+    durable = _durable_view(root) if (root / LEDGER_FILENAME).exists() else None
+    authoritative = durable["authoritative"] if durable is not None else None
     refresh_index(root)
     plan = json.loads((root / "plan.json").read_text(encoding="utf-8"))
     by_strategy = {method: [] for method in plan["manifest"]["methods"]}
     infrastructure, interrupted = Counter(), Counter()
-    with sqlite3.connect(root / "results.sqlite3") as database:
-        for strategy, classification, status, bundle, layout, case in database.execute(
-            "SELECT strategy, classification, status, bundle, layout, case_id FROM attempts "
-            "ORDER BY case_id, attempt"
-        ):
-            if classification == "behavior":
-                if not by_strategy[strategy] or by_strategy[strategy][-1][-1] != case:
-                    by_strategy[strategy].append((status, bundle, layout, case))
-            elif classification == "infrastructure":
-                infrastructure[strategy] += 1
-            else:
-                interrupted[strategy] += 1
+    for strategy, classification, status, bundle, layout, case, attempt in _index_rows(root):
+        if classification == "behavior":
+            if authoritative is not None and authoritative.get(case) != attempt:
+                continue
+            if not by_strategy[strategy] or by_strategy[strategy][-1][-1] != case:
+                by_strategy[strategy].append((status, bundle, layout, case))
+        elif classification == "infrastructure":
+            infrastructure[strategy] += 1
+        else:
+            interrupted[strategy] += 1
     layout_counts = [Counter(row[2] for row in rows) for rows in by_strategy.values()]
     shared = {layout: min(counts[layout] for counts in layout_counts)
               for layout in plan["manifest"]["layouts"]}
@@ -79,6 +115,14 @@ def analyze_campaign(root: Path, output: Path) -> dict:
         "corpus": [{"signature": signature, "representative": matches[0]["bundle"], "runs": matches}
                    for signature, matches in corpus.items()],
     }
+    if durable is not None:
+        selected_cases = {row[-1] for rows in by_strategy.values() for row in rows}
+        report["durable_ledger"] = {
+            "authoritative_cases": len(selected_cases),
+            "incomplete_cases": sorted(set(range(1, len(plan["cases"]) + 1)) - selected_cases),
+            "duplicate_behavior_attempts": durable["duplicates"],
+            "uncommitted_bundles": durable["uncommitted"],
+        }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report

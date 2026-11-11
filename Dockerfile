@@ -25,7 +25,7 @@ RUN sed -i 's@http://@https://@g' /etc/apt/sources.list.d/ubuntu.sources \
 
 RUN python3 -m venv --system-site-packages /opt/envfuzz-venv \
     && /opt/envfuzz-venv/bin/python -m pip install --no-cache-dir \
-        pydantic==2.11.7 PyYAML==6.0.2 typer==0.16.1 pytest==8.3.5
+        pydantic==2.11.7 PyYAML==6.0.2 typer==0.16.1 pytest==8.3.5 hypothesis==6.170.15
 ENV PATH="/opt/envfuzz-venv/bin:${PATH}"
 
 WORKDIR /workspace/envfuzz

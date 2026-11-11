@@ -12,12 +12,21 @@ import time
 from .results import EpisodeResult
 from .scenario import Scenario
 
+CONTAINER_GRACE_S = 20.0
+INSPECT_TIMEOUT_S = 10.0
+REMOVE_TIMEOUT_S = 15.0
+
 
 @dataclass(frozen=True)
 class WorkerLimits:
     image: str = "envfuzz:jazzy"
     cpus: float = 2.0
     memory: str = "1536m"
+
+
+def worker_deadline(watchdog: float) -> float:
+    """Longest wall-clock time run_worker can hold an attempt, including container cleanup."""
+    return watchdog + CONTAINER_GRACE_S + INSPECT_TIMEOUT_S + REMOVE_TIMEOUT_S
 
 
 def container_name(bundle: Path) -> str:
@@ -29,10 +38,11 @@ def remove_worker(bundle: Path) -> None:
     try:
         info = subprocess.run(
             ["docker", "inspect", "--format", '{{index .Config.Labels "org.envfuzz.worker"}}', name],
-            capture_output=True, text=True, check=False, timeout=10,
+            capture_output=True, text=True, check=False, timeout=INSPECT_TIMEOUT_S,
         )
         if info.returncode == 0 and info.stdout.strip() == name:
-            subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False, timeout=15)
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False,
+                           timeout=REMOVE_TIMEOUT_S)
     except (OSError, subprocess.TimeoutExpired):
         pass
 
@@ -88,7 +98,7 @@ def run_worker(
     try:
         with (attempt / "worker.log").open("w", encoding="utf-8") as log:
             completed = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT,
-                                       check=False, timeout=watchdog + 20)
+                                       check=False, timeout=watchdog + CONTAINER_GRACE_S)
         delivered = results / bundle.name
         if delivered.exists():
             delivered.replace(bundle)

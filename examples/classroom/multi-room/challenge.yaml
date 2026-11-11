@@ -1,0 +1,12 @@
+version: 1
+id: multi-room
+difficulty: advanced
+scenario: scenario.yaml
+baseline: baseline.json
+budget:
+  allowed: [add_clutter]
+  max_edits: 3
+  max_objects: 12
+repeats: 3
+timeout: 35
+watchdog: 80

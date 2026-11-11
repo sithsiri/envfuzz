@@ -1,0 +1,33 @@
+{
+  "completed_trials": 3,
+  "distributions": {
+    "map_error": [
+      0.8578199052132701,
+      0.8259109311740891,
+      0.5555555555555556
+    ],
+    "mission_duration_sim_s": [
+      3.9960000000000004,
+      3.9259999999999997,
+      4.462999999999999
+    ],
+    "position_error_max_m": [
+      0.0070600249953900514,
+      0.0036398337736013838,
+      0.006253167813920509
+    ]
+  },
+  "floor": 0.1,
+  "formula": "max(floor, mean + 3*population_stddev)",
+  "identity": {
+    "nav2_params_sha256": "299f9002d6dcfbf661e532c99f32dda1766eab3afa3ab71a52378d80e7ef956f",
+    "scenario_hash": "77c6cf1a2d297c388de04f812de75d895c987c297773a4c07c8b00015d4b9eb9",
+    "simulation_profile_sha256": "f2c3628563bd327e5c826dd497d7e4003c8a280b1f1a290ffbfbd716ddd25e85",
+    "world_mission_sha256": "2ce42e81875a878d288856cb0713ac3578df87c7cb3de444dfedec7e27c74ea5"
+  },
+  "schema_version": "1",
+  "thresholds": {
+    "map_error": 1.0,
+    "position_error_m": 0.1
+  }
+}

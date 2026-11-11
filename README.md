@@ -106,3 +106,4 @@ simulation time.
 - [Simulation assets](docs/simulation-assets.md) describes the robot and ROS topics.
 - [Phase 1 verification](docs/phase-1-verification.md) records the tested environments and measured results.
 - [OpenSpec changes](openspec/changes/) track project requirements and implementation tasks.
+- [Phase 2 workflow](docs/phase-2.md) covers parallel runs, map diagnostics, and classroom evaluation.

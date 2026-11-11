@@ -85,3 +85,43 @@ def render_report(bundle: Path, output: Path) -> None:
     ET.indent(svg, space="  ")
     output.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(svg).write(output, encoding="utf-8", xml_declaration=True)
+
+
+def render_diagnostics(bundle: Path, output: Path) -> None:
+    """Combine the existing trajectory plot with aligned occupancy evidence."""
+    from tempfile import TemporaryDirectory
+
+    from .maps import Grid
+
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "trajectory.svg"
+        render_report(bundle, path)
+        trajectory = path.read_text(encoding="utf-8").split("?>", 1)[-1]
+    panels = []
+    reference = bundle / "reference-map.json"
+    slam = bundle / "slam-map.json"
+    if reference.is_file() and slam.is_file():
+        truth = Grid.model_validate_json(reference.read_text(encoding="utf-8"))
+        estimate = Grid.model_validate_json(slam.read_text(encoding="utf-8"))
+        image = ET.Element("svg", xmlns="http://www.w3.org/2000/svg",
+                           viewBox=f"0 0 {truth.width} {truth.height}", width="480", role="img")
+        ET.SubElement(image, "title").text = "Aligned occupancy comparison"
+        for j in range(truth.height):
+            for i in range(truth.width):
+                actual = truth.at(i, j)
+                observed = estimate.at(*estimate.cell(*truth.center(i, j)))
+                if observed == -1:
+                    fill = "#d0d5dd"
+                elif actual == observed:
+                    fill = "#344054" if actual == 100 else "#ffffff"
+                else:
+                    fill = "#175cd3" if actual == 100 else "#b54708"
+                ET.SubElement(image, "rect", x=str(i), y=str(truth.height - j - 1), width="1", height="1", fill=fill)
+        panels.append("<h2>Aligned occupancy maps</h2>"
+                      "<p>Blue is missing occupancy, orange is unexpected occupancy, and gray is unknown.</p>"
+                      + ET.tostring(image, encoding="unicode"))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        '<!doctype html><html lang="en"><meta charset="utf-8"><title>EnvFuzz run</title>'
+        "<h1>EnvFuzz run diagnostics</h1>" + trajectory + "".join(panels) + "</html>\n", encoding="utf-8",
+    )

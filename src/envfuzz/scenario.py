@@ -12,6 +12,8 @@ from xml.etree import ElementTree as ET
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .profile import SimulationProfile
+
 SUPPORTED_VERSION = "1"
 
 
@@ -59,6 +61,13 @@ class Zone(BaseModel):
     polygon: list[tuple[float, float]] = Field(min_length=3)
 
 
+class TimedMove(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    at: float = Field(ge=0, le=3600)
+    object_id: str
+    pose: Pose
+
+
 class Scenario(BaseModel):
     model_config = ConfigDict(extra="forbid")
     version: str = SUPPORTED_VERSION
@@ -71,12 +80,21 @@ class Scenario(BaseModel):
     world: dict[str, float] = Field(
         default_factory=lambda: {"min_x": -5.0, "max_x": 5.0, "min_y": -5.0, "max_y": 5.0}
     )
+    events: list[TimedMove] | None = Field(default=None, max_length=1000)
+    surface_friction: dict[str, float] | None = None
 
     @field_validator("version")
     @classmethod
     def supported_version(cls, value: str) -> str:
-        if value != SUPPORTED_VERSION:
+        if value not in {SUPPORTED_VERSION, "2"}:
             raise ValueError(f"unsupported scenario version: {value}")
+        return value
+
+    @field_validator("events", "surface_friction")
+    @classmethod
+    def versioned_variants(cls, value, info: Any):
+        if value is not None and info.data.get("version") != "2":
+            raise ValueError(f"{info.field_name} requires scenario version 2")
         return value
 
     @field_validator("objects")
@@ -170,6 +188,26 @@ def validate_scenario(scenario: Scenario, clearance: float = 0.35) -> list[str]:
             for zone in scenario.restricted_zones:
                 if _inside(obj.pose.x, obj.pose.y, zone.polygon):
                     violations.append(f"{obj.id}: object is inside restricted zone {zone.id}")
+    if not violations and scenario.challenge.get("require_reachable"):
+        from .maps import unreachable_waypoint
+
+        unreachable = unreachable_waypoint(scenario)
+        if unreachable is not None:
+            label = f"goal {unreachable}" if unreachable else "start"
+            violations.append(f"{label}: no route with robot footprint clearance")
+    if not violations and scenario.events:
+        objects = {obj.id: obj for obj in scenario.objects}
+        previous = -1.0
+        for index, event in enumerate(scenario.events, 1):
+            if event.at < previous or event.object_id not in objects:
+                violations.append(f"event {index}: order or object reference is invalid")
+                break
+            previous = event.at
+            objects[event.object_id] = objects[event.object_id].model_copy(update={"pose": event.pose})
+            variant = scenario.model_copy(update={"objects": list(objects.values()), "events": None})
+            violations.extend(f"event {index}: {issue}" for issue in validate_scenario(variant, clearance))
+            if violations:
+                break
     return violations
 
 
@@ -181,7 +219,7 @@ def _inside(x: float, y: float, polygon: list[tuple[float, float]]) -> bool:
     return inside
 
 
-def compile_sdf(scenario: Scenario) -> str:
+def compile_sdf(scenario: Scenario, profile: SimulationProfile | None = None) -> str:
     violations = validate_scenario(scenario)
     if violations:
         raise ValueError("; ".join(violations))
@@ -190,6 +228,10 @@ def compile_sdf(scenario: Scenario) -> str:
     sdf = ET.Element("sdf", version="1.9")
     world = ET.SubElement(sdf, "world", name="envfuzz")
     ET.SubElement(world, "gravity").text = "0 0 -9.81"
+    if profile is not None:
+        physics = ET.SubElement(world, "physics", name="envfuzz_profile", type="ignored")
+        ET.SubElement(physics, "max_step_size").text = str(profile.step_s)
+        ET.SubElement(physics, "real_time_factor").text = str(profile.real_time_factor)
     for system, class_name in (
         ("physics", "Physics"),
         ("user-commands", "UserCommands"),
@@ -231,6 +273,18 @@ def compile_sdf(scenario: Scenario) -> str:
             dimensions = {"radius": str(obj.radius), "length": str(height)}
         pose = (obj.pose.x, obj.pose.y, height / 2, 0, 0, obj.pose.yaw)
         _add_static_model(world, f"obstacle_{obj.id}", pose, obj.shape, dimensions)
+
+    if scenario.events:
+        plugin = ET.SubElement(world, "plugin", filename="libenvfuzz_timeline.so", name="envfuzz::Timeline")
+        heights = {obj.id: (obj.size.z if obj.shape == "box" else obj.height) for obj in scenario.objects}
+        for index, event in enumerate(scenario.events, 1):
+            move = ET.SubElement(plugin, "move")
+            ET.SubElement(move, "index").text = str(index)
+            ET.SubElement(move, "nanoseconds").text = str(round(event.at * 1e9))
+            ET.SubElement(move, "model").text = f"obstacle_{event.object_id}"
+            ET.SubElement(move, "pose").text = _numbers(
+                (event.pose.x, event.pose.y, heights[event.object_id] / 2, 0, 0, event.pose.yaw)
+            )
 
     ET.indent(sdf, space="  ")
     return '<?xml version="1.0" ?>\n' + ET.tostring(sdf, encoding="unicode") + "\n"

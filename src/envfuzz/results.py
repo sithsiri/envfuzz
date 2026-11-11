@@ -25,7 +25,7 @@ class PoseSample(BaseModel):
 
 class EpisodeEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    tier: Literal["T1", "T2", "T4"]
+    tier: Literal["T1", "T2", "T3", "T4"]
     kind: str
     sim_start: float
     sim_end: float | None = None

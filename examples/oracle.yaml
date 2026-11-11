@@ -1,0 +1,12 @@
+version: 1
+tiers:
+  T1: {label: Stall or recovery loop, points: 1}
+  T2: {label: Position error, points: 2}
+  T3: {label: Map error, points: 3}
+  T4: {label: Restricted area, points: 4}
+stuck_displacement_m: 0.05
+stuck_window_s: 5
+position_window_s: 1
+min_map_coverage: 0.2
+recovery_count: 3
+recovery_window_s: 10

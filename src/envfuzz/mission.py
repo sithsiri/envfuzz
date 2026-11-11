@@ -11,19 +11,21 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 
 from action_msgs.msg import GoalStatus
 from ament_index_python.packages import get_package_share_directory
 from lifecycle_msgs.msg import State
 from lifecycle_msgs.srv import GetState
 from nav2_msgs.action import NavigateToPose
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import OccupancyGrid, Odometry
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.time import Time
+from sensor_msgs.msg import LaserScan
 from tf2_ros import Buffer, TransformException, TransformListener
 
 
@@ -43,13 +45,15 @@ def yaw(rotation) -> float:
 
 
 class Mission(Node):
-    def __init__(self, output: Path):
+    def __init__(self, output: Path, record_scans: bool = False):
         super().__init__("envfuzz_mission", parameter_overrides=[Parameter("use_sim_time", value=True)])
         self.client = ActionClient(self, NavigateToPose, "/navigate_to_pose")
         self.lifecycle = self.create_client(GetState, "/bt_navigator/get_state")
         self.transforms = Buffer()
         self.listener = TransformListener(self.transforms, self)
         self.create_subscription(Odometry, "/envfuzz/ground_truth", self.record, qos_profile_sensor_data)
+        self.create_subscription(OccupancyGrid, "/map", self.record_map,
+                                 QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.output = output
         self.origin: PoseSample | None = None
         self.previous: PoseSample | None = None
@@ -61,7 +65,14 @@ class Mission(Node):
         self.pending = deque()
         self.map_origin: tuple[float, float, float] | None = None
         self.world_origin: PoseSample | None = None
+        self.latest_map: OccupancyGrid | None = None
+        self.recoveries = []
+        self.goal_recoveries = 0
         self.telemetry = (output / "telemetry.jsonl").open("w", encoding="utf-8", buffering=1)
+        self.scans = None
+        if record_scans:
+            self.scans = (output / "scans.jsonl").open("w", encoding="utf-8", buffering=1)
+            self.create_subscription(LaserScan, "/scan", self.record_scan, qos_profile_sensor_data)
 
     def record(self, message: Odometry) -> None:
         pose = message.pose.pose
@@ -110,6 +121,45 @@ class Mission(Node):
     def now(self) -> float:
         return self.get_clock().now().nanoseconds / 1e9
 
+    def record_map(self, message: OccupancyGrid) -> None:
+        self.latest_map = message
+
+    def record_scan(self, message: LaserScan) -> None:
+        stamp = Time.from_msg(message.header.stamp)
+        self.scans.write(json.dumps({
+            "sim_time": stamp.nanoseconds / 1e9,
+            "ranges": [value if math.isfinite(value) else None for value in message.ranges],
+        }) + "\n")
+
+    def record_feedback(self, message) -> None:
+        count = message.feedback.number_of_recoveries
+        if count > self.goal_recoveries:
+            self.recoveries.append({"sim_time": self.now(), "count": count})
+            self.goal_recoveries = count
+
+    def save_map(self) -> None:
+        if self.latest_map is None:
+            return
+        message = self.latest_map
+        info = message.info
+        origin = info.origin
+        map_x, map_y, offset = self.map_origin
+        anchor = self.world_origin
+        dx, dy = origin.position.x - map_x, origin.position.y - map_y
+        c, s = math.cos(offset), math.sin(offset)
+        grid = {
+            "width": info.width, "height": info.height, "resolution": info.resolution,
+            "origin": {"x": anchor.x + dx * c + dy * s, "y": anchor.y - dx * s + dy * c,
+                       "yaw": yaw(origin.orientation) - offset},
+            "data": [-1 if value < 0 else 100 if value >= 50 else 0 for value in message.data],
+        }
+        if len(grid["data"]) <= 1_000_000:
+            (self.output / "slam-map.json").write_text(json.dumps(grid), encoding="utf-8")
+            (self.output / "map-alignment.json").write_text(json.dumps({
+                "map_anchor": {"x": map_x, "y": map_y, "yaw_offset": offset},
+                "world_anchor": asdict(anchor), "source_frame": message.header.frame_id,
+            }, indent=2), encoding="utf-8")
+
     def run(self, goals: list[dict], launch: subprocess.Popen, timeout: float) -> dict:
         state = None
         while True:
@@ -127,6 +177,7 @@ class Mission(Node):
                     break
                 state = None
         self.started = self.now()
+        mission_wall_start = time.monotonic()
         anchor = self.origin
         offset = yaw(initial.rotation) - anchor.yaw
         self.map_origin = (initial.translation.x, initial.translation.y, offset)
@@ -135,13 +186,18 @@ class Mission(Node):
 
         def finish(status, reason=None):
             self.flush_telemetry(final=True)
+            self.save_map()
             duration = max(0.0, self.now() - self.started)
+            wall_duration = time.monotonic() - mission_wall_start
             (self.output / "metrics.json").write_text(json.dumps({
                 "goals_reached": reached,
                 "goal_count": len(goals),
                 "path_length_m": self.distance,
                 "ground_truth_samples": self.samples,
                 "paired_pose_samples": self.paired,
+                "recoveries": self.recoveries,
+                "mission_wall_duration_s": wall_duration,
+                "mission_real_time_factor": duration / wall_duration if wall_duration > 0 else None,
                 "position_rmse_m": math.sqrt(self.squared_pose_error / self.paired) if self.paired else None,
             }, indent=2) + "\n", encoding="utf-8")
             return {"status": status, "classification": "behavior",
@@ -157,7 +213,8 @@ class Mission(Node):
             request.pose.pose.position.y = initial.translation.y + dx * s + dy * c
             request.pose.pose.orientation.z = math.sin((goal["yaw"] + offset) / 2)
             request.pose.pose.orientation.w = math.cos((goal["yaw"] + offset) / 2)
-            accepted = self.client.send_goal_async(request)
+            self.goal_recoveries = 0
+            accepted = self.client.send_goal_async(request, feedback_callback=self.record_feedback)
             if not self.wait(accepted, launch, timeout):
                 return finish("timeout", "Simulation-time mission limit expired")
             handle = accepted.result()
@@ -202,7 +259,7 @@ def main() -> None:
         shutil.copyfile(nav2 / "params" / "nav2_params.yaml", params)
     command.append(f"params_file:={params}")
     rclpy.init(args=[])
-    mission = Mission(output)
+    mission = Mission(output, record_scans=bool(scenario.get("events")))
     try:
         with subprocess.Popen(command) as launch:
             try:
@@ -214,6 +271,8 @@ def main() -> None:
         (output / "mission.json").write_text(json.dumps(result), encoding="utf-8")
     finally:
         mission.telemetry.close()
+        if mission.scans is not None:
+            mission.scans.close()
         mission.destroy_node()
         rclpy.try_shutdown()
 

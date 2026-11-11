@@ -1,10 +1,11 @@
 """Start Gazebo and the Nav2 TurtleBot stack in a compiled envfuzz world."""
 
+import os
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import xacro
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     AppendEnvironmentVariable, DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription,
@@ -27,6 +28,11 @@ def robot_sdf(turtlebot: Path) -> str:
     cylinder = ET.SubElement(geometry, "cylinder")
     ET.SubElement(cylinder, "radius").text = "0.22"
     ET.SubElement(cylinder, "length").text = "0.089"
+    sensor = model.find("./link[@name='base_scan']/sensor")
+    if "ENVFUZZ_LIDAR_HZ" in os.environ:
+        sensor.find("update_rate").text = os.environ["ENVFUZZ_LIDAR_HZ"]
+    if "ENVFUZZ_LIDAR_RAYS" in os.environ:
+        sensor.find(".//samples").text = os.environ["ENVFUZZ_LIDAR_RAYS"]
     plugin = ET.SubElement(
         model, "plugin", filename="gz-sim-odometry-publisher-system",
         name="gz::sim::systems::OdometryPublisher",
@@ -52,6 +58,7 @@ def generate_launch_description():
         DeclareLaunchArgument("params_file", default_value=str(nav2 / "params" / "nav2_params.yaml")),
         AppendEnvironmentVariable("GZ_SIM_RESOURCE_PATH", str(turtlebot / "models")),
         AppendEnvironmentVariable("GZ_SIM_RESOURCE_PATH", str(turtlebot.parent)),
+        AppendEnvironmentVariable("GZ_SIM_SYSTEM_PLUGIN_PATH", str(Path(get_package_prefix("envfuzz_sim")) / "lib")),
         Node(
             package="ros_gz_sim", executable="create",
             arguments=[

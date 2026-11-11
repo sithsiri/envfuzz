@@ -1,0 +1,16 @@
+version: "1"
+world: {min_x: -4, max_x: 4, min_y: -3, max_y: 3}
+start: {x: -1.3, y: 0}
+goals: [{x: 1.1, y: 0}]
+objects:
+  - id: north-wall
+    shape: box
+    size: {x: 0.16, y: 2, z: 2}
+    pose: {x: 0, y: 2}
+  - id: south-wall
+    shape: box
+    size: {x: 0.16, y: 2, z: 2}
+    pose: {x: 0, y: -2}
+restricted_zones:
+  - id: service-room
+    polygon: [[2.5, 1.8], [3.5, 1.8], [3.5, 2.6], [2.5, 2.6]]

@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.8)
 project(envfuzz_sim)
 find_package(ament_cmake REQUIRED)
+find_package(gz_sim_vendor REQUIRED)
+find_package(gz-sim8 REQUIRED)
+add_library(envfuzz_timeline SHARED src/timeline.cpp)
+target_compile_features(envfuzz_timeline PRIVATE cxx_std_17)
+target_link_libraries(envfuzz_timeline PRIVATE gz-sim8::gz-sim8)
+install(TARGETS envfuzz_timeline DESTINATION lib)
 install(DIRECTORY worlds launch DESTINATION share/${PROJECT_NAME})
 ament_package()
 

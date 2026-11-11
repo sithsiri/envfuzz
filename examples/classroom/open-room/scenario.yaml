@@ -1,0 +1,7 @@
+version: "1"
+world: {min_x: -4, max_x: 4, min_y: -3, max_y: 3}
+start: {x: -1, y: 0}
+goals: [{x: 1, y: 0}]
+restricted_zones:
+  - id: storage
+    polygon: [[-3.5, 2], [-2.5, 2], [-2.5, 2.7], [-3.5, 2.7]]

@@ -1,0 +1,13 @@
+version: "2"
+start: {x: 0, y: 0}
+goals:
+  - {x: 2, y: 0}
+objects:
+  - id: chair
+    shape: box
+    pose: {x: 2, y: 2}
+    size: {x: 0.4, y: 0.4, z: 0.6}
+events:
+  - at: 3
+    object_id: chair
+    pose: {x: 2, y: 1.1}

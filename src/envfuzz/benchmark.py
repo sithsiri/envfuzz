@@ -2,68 +2,23 @@
 
 from __future__ import annotations
 
-from collections import deque
 from itertools import cycle, product
 import math
 import random
 from typing import Literal
 
+from .maps import unreachable_waypoint
 from .scenario import Pose, Scenario, ScenarioObject, Size, validate_scenario
 
 Layout = Literal["apartment", "corridor", "open_room"]
-Sampling = Literal["uniform", "stratified"]
+Sampling = Literal["uniform", "stratified", "coverage"]
 LAYOUT_DEPTHS = {"apartment": (5.5, 6.5, 7.5), "corridor": (2.5, 3.0, 3.5),
                  "open_room": (8.0, 9.0, 10.0)}
 STRATA = tuple(product(range(3), repeat=3))
 
 
-def _distance_to_obstacle(x: float, y: float, obstacle: ScenarioObject) -> float:
-    dx, dy = x - obstacle.pose.x, y - obstacle.pose.y
-    if obstacle.shape == "cylinder":
-        return math.hypot(dx, dy) - obstacle.radius
-    c, s = math.cos(obstacle.pose.yaw), math.sin(obstacle.pose.yaw)
-    local_x, local_y = dx * c + dy * s, -dx * s + dy * c
-    return math.hypot(
-        max(0.0, abs(local_x) - obstacle.size.x / 2),
-        max(0.0, abs(local_y) - obstacle.size.y / 2),
-    )
-
-
 def route_exists(scenario: Scenario, resolution: float = 0.2, radius: float = 0.22) -> bool:
-    """Check waypoint connectivity on a grid conservatively inflated by the footprint."""
-    bounds = scenario.world
-    min_x, min_y = bounds["min_x"], bounds["min_y"]
-    width = math.floor((bounds["max_x"] - min_x) / resolution)
-    height = math.floor((bounds["max_y"] - min_y) / resolution)
-    if width * height > 100_000:
-        raise ValueError("World is too large for the reachability grid")
-    margin = radius + resolution / math.sqrt(2)
-    free = set()
-    for i in range(width):
-        x = min_x + (i + 0.5) * resolution
-        for j in range(height):
-            y = min_y + (j + 0.5) * resolution
-            wall_distance = min(x - min_x, bounds["max_x"] - x, y - min_y, bounds["max_y"] - y)
-            if wall_distance >= margin and all(
-                _distance_to_obstacle(x, y, obstacle) >= margin for obstacle in scenario.objects
-            ):
-                free.add((i, j))
-
-    waypoints = [
-        (math.floor((pose.x - min_x) / resolution), math.floor((pose.y - min_y) / resolution))
-        for pose in [scenario.start, *scenario.goals]
-    ]
-    if not all(point in free for point in waypoints):
-        return False
-    reachable = {waypoints[0]}
-    pending = deque(reachable)
-    while pending:
-        x, y = pending.popleft()
-        for point in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
-            if point in free and point not in reachable:
-                reachable.add(point)
-                pending.append(point)
-    return all(point in reachable for point in waypoints[1:])
+    return unreachable_waypoint(scenario, resolution, radius) is None
 
 
 def sample_scenarios(layout: Layout, method: Sampling, seed: int, count: int) -> list[Scenario]:
@@ -72,12 +27,20 @@ def sample_scenarios(layout: Layout, method: Sampling, seed: int, count: int) ->
     rng.shuffle(strata)
     balanced = cycle(strata)
     scenarios = []
+    counts = dict.fromkeys(STRATA, 0)
     for _ in range(count):
-        width, density, distance = next(balanced) if method == "stratified" else rng.choice(STRATA)
+        if method == "stratified":
+            width, density, distance = next(balanced)
+        elif method == "coverage":
+            candidates = rng.sample(STRATA, 5)
+            width, density, distance = min(candidates, key=counts.__getitem__)
+        else:
+            width, density, distance = rng.choice(STRATA)
         for _ in range(50):
             scenario = _draw_scenario(layout, seed, rng, width, density, distance)
             if scenario is not None and route_exists(scenario):
                 scenarios.append(scenario)
+                counts[width, density, distance] += 1
                 break
         else:
             raise ValueError(f"Could not sample a reachable {layout} scenario in {(width, density, distance)}")

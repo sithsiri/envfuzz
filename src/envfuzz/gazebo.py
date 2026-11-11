@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import subprocess
@@ -13,7 +14,10 @@ import sys
 import time
 from uuid import uuid4
 
+from .maps import save_map_comparison
 from .oracle import load_baseline, restricted_events
+from .oracle_config import load_oracle
+from .profile import load_profile
 from .results import EpisodeResult, write_result_bundle
 from .runner import _terminate
 from .scenario import Scenario, compile_sdf
@@ -22,12 +26,15 @@ from .scoring import apply_baseline, read_trace
 
 def run_gazebo(
     scenario: Scenario, output: Path, timeout: float, watchdog: float,
-    params_file: Path | None = None, baseline_file: Path | None = None,
+    params_file: Path | None = None, baseline_file: Path | None = None, oracle_file: Path | None = None,
+    profile_file: Path | None = None,
 ) -> EpisodeResult:
     if not scenario.goals:
         raise ValueError("A Gazebo mission requires at least one goal")
-    world = compile_sdf(scenario)
+    profile = load_profile(profile_file)
+    world = compile_sdf(scenario, profile)
     baseline = load_baseline(baseline_file) if baseline_file is not None else None
+    oracle = load_oracle(oracle_file)
     if baseline is not None and (
         baseline.get("schema_version") != "1" or "position_error_m" not in baseline.get("thresholds", {})
     ):
@@ -41,15 +48,23 @@ def run_gazebo(
         shutil.copyfile(params_file, output / "nav2.yaml")
     if baseline_file is not None:
         shutil.copyfile(baseline_file, output / "baseline.json")
-    (output / "run.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        (output / "oracle.yaml").write_text(oracle.model_dump_json(indent=2), encoding="utf-8")
+    if profile is not None:
+        (output / "profile.yaml").write_text(profile.model_dump_json(indent=2), encoding="utf-8")
     environment = os.environ.copy()
+    environment.pop("ENVFUZZ_LIDAR_HZ", None)
+    environment.pop("ENVFUZZ_LIDAR_RAYS", None)
     environment.update(
-        ROS_DOMAIN_ID=str(10 + secrets.randbelow(90)),
+        ROS_DOMAIN_ID=os.environ.get("ENVFUZZ_WORKER_DOMAIN", str(10 + secrets.randbelow(90))),
         ROS_AUTOMATIC_DISCOVERY_RANGE="LOCALHOST",
         ROS_STATIC_PEERS="",
         GZ_PARTITION=f"envfuzz-{uuid4().hex}",
         ROS_LOG_DIR=str(output / "ros-logs"),
     )
+    config.update(ros_domain_id=environment["ROS_DOMAIN_ID"], gazebo_partition=environment["GZ_PARTITION"])
+    (output / "run.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    if profile is not None:
+        environment.update(ENVFUZZ_LIDAR_HZ=str(profile.lidar_hz), ENVFUZZ_LIDAR_RAYS=str(profile.lidar_rays))
     process = None
     started = time.monotonic()
     worker_result = output / "mission.json"
@@ -64,8 +79,10 @@ def run_gazebo(
             process.wait(timeout=watchdog)
         if worker_result.exists() and process.returncode == 0:
             result = EpisodeResult.model_validate_json(worker_result.read_text(encoding="utf-8"))
+            final_layout = _record_events(output, scenario)
+            save_map_comparison(output, final_layout)
             if baseline is not None:
-                apply_baseline(result, scenario, output, baseline)
+                apply_baseline(result, scenario, output, baseline, oracle)
             elif scenario.restricted_zones:
                 truth, _ = read_trace(output / "telemetry.jsonl")
                 result.events = restricted_events(truth, scenario.restricted_zones, radius=0.22)
@@ -93,3 +110,23 @@ def run_gazebo(
     write_result_bundle(output, scenario, world, result, logs=None)
     worker_result.unlink(missing_ok=True)
     return result
+
+
+def _record_events(output: Path, scenario: Scenario) -> Scenario:
+    if not scenario.events:
+        return scenario
+    log = (output / "logs.txt").read_text(encoding="utf-8", errors="replace")
+    applied = {int(index): int(stamp) / 1e9 for index, stamp in re.findall(
+        r"ENVFUZZ_EVENT (\d+) (\d+)", log,
+    )}
+    if "ENVFUZZ_EVENT_ERROR" in log or ("Failed to load system plugin" in log and "envfuzz_timeline" in log):
+        raise ValueError("Gazebo could not apply the scheduled environment edits")
+    states = {obj.id: obj for obj in scenario.objects}
+    records = []
+    for index, event in enumerate(scenario.events, 1):
+        records.append({"object_id": event.object_id, "requested_sim_time": event.at,
+                        "applied_sim_time": applied.get(index)})
+        if index in applied:
+            states[event.object_id] = states[event.object_id].model_copy(update={"pose": event.pose})
+    (output / "events-applied.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
+    return scenario.model_copy(update={"objects": list(states.values())})

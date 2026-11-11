@@ -76,7 +76,7 @@ def _inside(x: float, y: float, polygon: list[tuple[float, float]]) -> bool:
     return inside
 
 
-def _touches_boundary(x: float, y: float, polygon: list[tuple[float, float]], radius: float) -> bool:
+def touches_boundary(x: float, y: float, polygon: list[tuple[float, float]], radius: float) -> bool:
     for (x1, y1), (x2, y2) in zip(polygon, polygon[1:] + polygon[:1]):
         dx, dy = x2 - x1, y2 - y1
         length_squared = dx * dx + dy * dy
@@ -93,7 +93,7 @@ def restricted_events(samples: list[PoseSample], zones: list[Any], radius: float
         begin: float | None = None
         for sample in samples:
             if _inside(sample.x, sample.y, zone.polygon) or (
-                radius > 0 and _touches_boundary(sample.x, sample.y, zone.polygon, radius)
+                radius > 0 and touches_boundary(sample.x, sample.y, zone.polygon, radius)
             ):
                 begin = sample.sim_time if begin is None else begin
             elif begin is not None:
@@ -107,7 +107,7 @@ def restricted_events(samples: list[PoseSample], zones: list[Any], radius: float
 
 
 def score_events(events: list[EpisodeEvent], tier_points: dict[str, int] | None = None) -> tuple[int, list[str]]:
-    points = tier_points or {"T1": 1, "T2": 2, "T4": 4}
+    points = tier_points or {"T1": 1, "T2": 2, "T3": 3, "T4": 4}
     tiers = sorted({event.tier for event in events}, key=lambda tier: (-points.get(tier, 0), tier))
     return (max((points.get(event.tier, 0) for event in events), default=0), tiers)
 

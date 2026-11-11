@@ -135,17 +135,19 @@ def run_command(
     baseline_file: Optional[Path] = typer.Option(None, "--baseline", exists=True, dir_okay=False),
     oracle_file: Optional[Path] = typer.Option(None, "--oracle", exists=True, dir_okay=False),
     profile_file: Optional[Path] = typer.Option(None, "--profile", exists=True, dir_okay=False),
+    keepout_filter: bool = typer.Option(False, "--keepout-filter", help="Enable Nav2's Keepout Filter for restricted zones."),
 ) -> None:
     scenario = load_scenario(path)
     try:
         if smoke:
-            if any(path is not None for path in (params_file, baseline_file, oracle_file, profile_file)):
+            if keepout_filter or any(path is not None for path in (params_file, baseline_file, oracle_file, profile_file)):
                 raise typer.BadParameter("Nav2 settings, baselines, oracle settings, and profiles require Gazebo")
             result = EpisodeRunner(watchdog_seconds=watchdog).run(
                 scenario, output=output, sim_timeout=timeout,
             )
         else:
-            result = run_gazebo(scenario, output, timeout, watchdog, params_file, baseline_file, oracle_file, profile_file)
+            result = run_gazebo(scenario, output, timeout, watchdog, params_file, baseline_file,
+                                oracle_file, profile_file, keepout_filter)
     except FileExistsError as error:
         raise typer.BadParameter(f"Choose a new output directory: {output}") from error
     except (OSError, ValueError) as error:
@@ -173,6 +175,7 @@ def replay(
         False, params if params.is_file() else None, baseline_file if baseline_file.is_file() else None,
         oracle_file if oracle_file.is_file() else None,
         profile,
+        config.get("keepout_filter", False),
     )
 
 

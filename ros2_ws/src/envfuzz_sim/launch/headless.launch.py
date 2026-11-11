@@ -13,7 +13,7 @@ from launch.actions import (
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import LifecycleNode, Node
 
 # CPU lidar-only RTAB-Map, following rtabmap_demos turtlebot3_scan.launch.py (0.23.13):
 # 2D laser scans plus wheel odometry, ICP registration constrained to 3 DoF, no camera.
@@ -163,6 +163,7 @@ def generate_launch_description():
     record_contacts = os.environ.get("ENVFUZZ_RECORD_CONTACTS") == "1"
     record_cliff = os.environ.get("ENVFUZZ_RECORD_CLIFF") == "1"
     camera_profile = os.environ.get("ENVFUZZ_CAMERA_PROFILE") == "1"
+    keepout_mask = os.environ.get("ENVFUZZ_KEEPOUT_FILTER_MASK")
     backend = os.environ.get("ENVFUZZ_NAVIGATION_BACKEND")
     observation_bridges = []
     if record_contacts:
@@ -225,6 +226,25 @@ def generate_launch_description():
             output="screen",
         ),
         *observation_bridges,
+        *([LifecycleNode(
+            package="nav2_map_server", executable="map_server", name="keepout_filter_mask_server",
+            namespace="",
+            output="screen", parameters=[{
+                "yaml_filename": keepout_mask, "use_sim_time": True,
+            }], remappings=[("map", "/keepout_filter_mask")],
+        ), LifecycleNode(
+            package="nav2_map_server", executable="costmap_filter_info_server",
+            name="costmap_filter_info_server", namespace="", output="screen", parameters=[{
+                "use_sim_time": True, "type": 0, "filter_info_topic": "/costmap_filter_info",
+                "mask_topic": "/keepout_filter_mask", "base": 0.0, "multiplier": 1.0,
+            }],
+        ), Node(
+            package="nav2_lifecycle_manager", executable="lifecycle_manager",
+            name="lifecycle_manager_keepout_filter", output="screen", parameters=[{
+                "use_sim_time": True, "autostart": True,
+                "node_names": ["keepout_filter_mask_server", "costmap_filter_info_server"],
+            }],
+        )] if keepout_mask else []),
         ExecuteProcess(
             cmd=["gz", "sim", "-r", "-s", "--headless-rendering", world],
             output="screen",

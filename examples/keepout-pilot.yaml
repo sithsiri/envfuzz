@@ -1,0 +1,9 @@
+version: "1"
+seed: 117
+start: {x: -2.0, y: 0.0, yaw: 0.0}
+goals:
+  - {x: 2.0, y: 0.0, yaw: 0.0}
+restricted_zones:
+  - id: center-keepout
+    polygon: [[-0.5, -0.7], [0.5, -0.7], [0.5, 0.7], [-0.5, 0.7]]
+world: {min_x: -4.0, max_x: 4.0, min_y: -3.0, max_y: 3.0}

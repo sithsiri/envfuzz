@@ -1,0 +1,10 @@
+version: "1"
+seed: 319
+start: {x: 0.0, y: 0.0, yaw: 0.0}
+goals:
+  - {x: 4.0, y: 0.0, yaw: 0.0}
+objects:
+  - id: center-obstacle
+    shape: box
+    pose: {x: 2.0, y: 0.0, yaw: 0.0}
+    size: {x: 0.6, y: 0.7, z: 0.8}

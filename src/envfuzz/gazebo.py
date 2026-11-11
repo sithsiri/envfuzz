@@ -14,7 +14,7 @@ import sys
 import time
 from uuid import uuid4
 
-from .maps import export_navigation_map, save_map_comparison
+from .maps import export_keepout_filter_map, export_navigation_map, save_map_comparison
 from .oracle import load_baseline, restricted_events
 from .oracle_config import load_oracle
 from .profile import SimulationProfile, load_profile
@@ -40,13 +40,15 @@ def require_camera_capability() -> None:
 def run_gazebo(
     scenario: Scenario, output: Path, timeout: float, watchdog: float,
     params_file: Path | None = None, baseline_file: Path | None = None, oracle_file: Path | None = None,
-    profile_file: Path | None = None,
+    profile_file: Path | None = None, keepout_filter: bool = False,
 ) -> EpisodeResult:
     if not scenario.goals:
         raise ValueError("A Gazebo mission requires at least one goal")
     profile = load_profile(profile_file)
     if profile is not None and profile.camera_profile:
         require_camera_capability()
+    if keepout_filter and not scenario.restricted_zones:
+        raise ValueError("Keepout Filter requires at least one restricted zone")
     world = compile_sdf(scenario, profile)
     baseline = load_baseline(baseline_file) if baseline_file is not None else None
     oracle = load_oracle(oracle_file)
@@ -63,7 +65,7 @@ def run_gazebo(
     if resolved_profile["navigation_backend"] == "amcl":
         localization_map = export_navigation_map(scenario, output)
     config = {"backend": "gazebo", "timeout": timeout, "watchdog": watchdog,
-              "simulation_profile": resolved_profile}
+              "simulation_profile": resolved_profile, "keepout_filter": keepout_filter}
     if params_file is not None:
         shutil.copyfile(params_file, output / "nav2.yaml")
     if baseline_file is not None:
@@ -82,6 +84,9 @@ def run_gazebo(
     environment.pop("ENVFUZZ_CAMERA_HEIGHT", None)
     environment["ENVFUZZ_ROBOT_MODEL"] = resolved_profile["robot_model"]
     environment["ENVFUZZ_NAVIGATION_BACKEND"] = resolved_profile["navigation_backend"]
+    environment.pop("ENVFUZZ_KEEPOUT_FILTER_MASK", None)
+    if keepout_filter:
+        environment["ENVFUZZ_KEEPOUT_FILTER_MASK"] = str(export_keepout_filter_map(scenario, output))
     if localization_map is not None:
         environment["ENVFUZZ_LOCALIZATION_MAP"] = str(localization_map)
     else:

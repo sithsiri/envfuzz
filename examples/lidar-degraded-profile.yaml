@@ -1,0 +1,3 @@
+version: 1
+lidar_fov_deg: 120
+lidar_noise_m: 0.02

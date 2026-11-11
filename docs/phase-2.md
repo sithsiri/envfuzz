@@ -63,6 +63,95 @@ representative in the regression corpus.
   then tries removing unrelated obstacles. The output retains the case signature,
   selected scenario, and measured repeat rate.
 
+## Keepout Filter pilot
+
+The default Nav2 parameters do not load a Keepout Filter. The small pilot below
+compares the same straight start-to-goal mission with the filter disabled and
+enabled on both costmaps, with an inflation filter to account for the robot's
+footprint. It uses AMCL so the generated filter mask shares the static
+navigation map's frame and origin. Each run records the restricted-zone event
+and goal outcome; the filtered run should reach the goal without a zone event.
+
+Build the updated image, then run the paired episodes. Use `tmux` if you want
+an interactive session that survives terminal disconnects.
+
+```sh
+tmux new -s envfuzz-keepout
+docker build -t envfuzz:jazzy .
+mkdir -p runs/keepout-pilot
+docker run --rm -v "$PWD/runs:/workspace/envfuzz/runs" envfuzz:jazzy \
+  run examples/keepout-pilot.yaml --profile examples/amcl-localization-profile.yaml \
+  --output runs/keepout-pilot/no-filter --timeout 45 --watchdog 180
+docker run --rm -v "$PWD/runs:/workspace/envfuzz/runs" envfuzz:jazzy \
+  run examples/keepout-pilot.yaml --profile examples/amcl-localization-profile.yaml \
+  --keepout-filter --output runs/keepout-pilot/keepout-filter-inflated \
+  --timeout 45 --watchdog 180
+```
+
+Compare `result.json` and `telemetry.jsonl` in the two bundles. The control
+should enter `center-keepout`; the enabled run should go around it and complete.
+A filtered run that fails to start the filter servers or costmap plugins is an
+infrastructure/configuration failure, not evidence about avoidance.
+
+For five fresh matched pairs, the repeat driver alternates which condition runs
+first. Launch it in a detached `screen` session so it survives a terminal
+disconnect; reconnect with `screen -r envfuzz-keepout-repeats`:
+
+```sh
+mkdir -p runs/keepout-pilot-repeats-20261111
+screen -dmS envfuzz-keepout-repeats bash -c \
+  'bash scripts/keepout_pilot_repeats.sh > runs/keepout-pilot-repeats-20261111/runner.log 2>&1'
+screen -ls
+tail -f runs/keepout-pilot-repeats-20261111/runner.log
+```
+
+This protects against terminal disconnects, not host shutdown. The repeat
+bundles are written under `runs/keepout-pilot-repeats-20261111/`.
+
+## Dynamic obstacle pilots
+
+The dynamic-obstacle driver compares a stationary off-route object with (a) a
+scripted actor and (b) a timed object move, each of which crosses the robot's
+route. It runs three repeats per condition, records bumper contacts, and
+alternates run order. Start it in `screen`:
+
+```sh
+mkdir -p runs/dynamic-obstacle-pilot-20261111
+screen -dmS envfuzz-dynamic-obstacles bash -c \
+  'bash scripts/dynamic_obstacle_pilot.sh > runs/dynamic-obstacle-pilot-20261111/runner.log 2>&1'
+screen -ls
+```
+
+Compare each `control-N` bundle with its `actor-N` or `timed-N` partner. Check
+`result.json`, `metrics.json`, `contacts.jsonl`, `events-applied.json`, and
+`scans.jsonl`: the moving obstacle should appear on the scan, trigger a detour,
+and leave the robot able to complete the mission without contact.
+
+## LiDAR robustness pilot
+
+This pilot repeats a fixed obstacle course with the default LiDAR and with a
+120° field of view plus 2 cm range noise. It alternates run order and records
+three runs per condition. Compare goal outcomes, path length, map metrics, and
+position RMSE in the bundles:
+
+```sh
+mkdir -p runs/lidar-degradation-pilot-20261111
+screen -dmS envfuzz-lidar-pilot bash -c \
+  'bash scripts/lidar_degradation_pilot.sh > runs/lidar-degradation-pilot-20261111/runner.log 2>&1'
+screen -ls
+```
+
+Pilot results (three runs per condition): the nominal and degraded sensors
+each completed all three goals. Median path lengths were 4.83 m and 4.89 m,
+and median position RMSE was 0.013 m for both. This mild degradation did not
+show a meaningful navigation regression in this obstacle course.
+
+The dynamic-obstacle pilot also completed all runs. The stationary controls had
+a 3.77 m median path; scripted actors increased it to 4.68 m and timed moves to
+4.76 m. All actor and timed-move updates were applied, all goals were reached,
+and no bumper contacts were recorded. This is evidence that both timeline
+interfaces perturb navigation as intended in this fixture.
+
 The map metric is occupied-cell IoU over cells known in both grids, after
 projecting the SLAM grid into world coordinates. The report also shows coverage,
 missing occupancy, and extra occupancy. The T3 detector applies the calibrated

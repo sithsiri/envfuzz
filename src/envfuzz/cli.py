@@ -11,7 +11,7 @@ import typer
 from pydantic import ValidationError
 
 from .analysis import analyze_campaign, replay_corpus
-from .campaign import prepare_campaign, run_campaign, run_parallel_campaign
+from .campaign import prepare_campaign, run_campaign, run_durable_worker, run_parallel_campaign
 from .campaign_index import render_campaign_report
 from .classroom import check_submission, evaluate_submission, write_scoreboard
 from .materials import reference_rays
@@ -144,7 +144,7 @@ def run_command(
             result = run_gazebo(scenario, output, timeout, watchdog, params_file, baseline_file, oracle_file, profile_file)
     except FileExistsError as error:
         raise typer.BadParameter(f"Choose a new output directory: {output}") from error
-    except ValueError as error:
+    except (OSError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error
     _report_run(result, output)
 
@@ -321,6 +321,29 @@ def campaign_command(
                        err=True)
             raise typer.Exit(code=2)
         typer.echo(str(output / "results.csv"))
+
+
+@app.command("campaign-worker")
+def campaign_worker_command(
+    manifest: Path = typer.Argument(..., exists=True, dir_okay=False),
+    output: Path = typer.Option(..., exists=True, file_okay=False),
+    worker_id: str = typer.Option(..., min=1),
+    image: str = typer.Option("envfuzz:jazzy"),
+    worker_cpus: float = typer.Option(2.0, min=0.1),
+    worker_memory: str = typer.Option("1536m"),
+    lease_s: float = typer.Option(600, min=1),
+    retries: int = typer.Option(2, min=0),
+) -> None:
+    """Run one trusted worker against a shared campaign directory."""
+    try:
+        config, cases = prepare_campaign(manifest, output)
+        completed = run_durable_worker(
+            config, cases, output, worker_id, WorkerLimits(image, worker_cpus, worker_memory),
+            lease_s=lease_s, retries=retries,
+        )
+    except (OSError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(f"{completed} authoritative results committed in {output}")
 
 
 @app.command("fuzz")

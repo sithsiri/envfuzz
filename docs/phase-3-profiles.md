@@ -36,6 +36,35 @@ a matching file inside the challenge directory. The optional
 `navigation_backend` defaults to `slam_toolbox` and must agree with the
 profile. Use separate baselines when changing robot or sensor settings.
 
+## Experimental AMCL localization profile
+
+`examples/amcl-localization-profile.yaml` selects Nav2 AMCL. EnvFuzz derives a
+deterministic occupancy map from the static scenario layout and archives its
+PGM image and map-server YAML in the run bundle. AMCL starts Nav2 with that
+map instead of `slam_toolbox`. It needs a fresh matching baseline. The
+comparison and pinned-runtime smoke evidence are still pending.
+
+## Optional RTAB-Map camera profile
+
+`examples/rtabmap-camera-profile.yaml` selects RTAB-Map with a 320 x 240 RGB-D
+camera at 15 Hz. The profile is optional and requires an NVIDIA GPU exposed to
+the runtime; EnvFuzz checks `nvidia-smi` before it launches Gazebo. It starts
+the Gazebo RGB-D camera, bridges its image, depth-image and camera-info topics,
+and starts RTAB-Map without visual tools. The bundle records the resolved
+camera dimensions, rate, and `rtabmap` backend.
+
+Run it only in a GPU-enabled image runtime:
+
+```sh
+docker build -t envfuzz:camera .
+docker run --rm --gpus all --network none -v "$PWD/runs:/runs" envfuzz:camera \
+  run examples/scenario.yaml --profile examples/rtabmap-camera-profile.yaml --output /runs/rtabmap
+```
+
+Use a fresh baseline made with this same profile before scoring. The default
+profile remains CPU-only and uses `slam_toolbox`; it does not load the camera
+or RTAB-Map path.
+
 ## Headless smoke results
 
 Both profiles completed one calibration trial and a separate scored episode

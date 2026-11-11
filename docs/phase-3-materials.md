@@ -26,9 +26,11 @@ transparent material, and no reported range for the dark material. The
 range tolerance is 0.001 m.
 
 The compiler also sets Gazebo visual transparency and return intensity.
-The Gazebo Harmonic experiment found that the native planar range still
-reported the front surface even when it was visually transparent.
-Transmission and dropouts are therefore reference observations produced by
-the offline probe. Navigation continues to consume Gazebo's native scan.
-The reflective preset models intensity only. It does not model
-angle-dependent secondary reflections. [Live surface probe](phase-3-verification.md#passive-lidar-surface-probe)
+Navigation continues to consume Gazebo's native scan, which reports native
+range and intensity values. The deterministic offline probe is the normative
+surface-response reference: it models transmission, reflectivity-dependent
+dropouts, and thin-object ray intersections against the tolerances above.
+These effects are synthetic observations, not live Gazebo sensor physics.
+This boundary avoids a custom scan filter or Gazebo sensor plugin. The
+reflective preset models intensity only; it does not model angle-dependent
+secondary reflections. [Live surface probe](phase-3-verification.md#passive-lidar-surface-probe)

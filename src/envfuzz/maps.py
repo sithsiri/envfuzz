@@ -144,3 +144,24 @@ def save_map_comparison(bundle: Path, scenario: Scenario) -> dict | None:
     (bundle / "reference-map.json").write_text(reference.model_dump_json(), encoding="utf-8")
     (bundle / "map-metrics.json").write_text(json.dumps(comparison, indent=2) + "\n", encoding="utf-8")
     return comparison
+
+
+def export_navigation_map(scenario: Scenario, directory: Path, resolution: float = 0.05) -> Path:
+    """Write a deterministic Nav2 map-server image and metadata from static geometry."""
+    grid = reference_grid(scenario, resolution=resolution)
+    image = directory / "localization-map.pgm"
+    # Nav2's map_server reads PGM rows from top to bottom while Grid stores y upward.
+    pixels = bytearray()
+    for row in range(grid.height - 1, -1, -1):
+        for column in range(grid.width):
+            pixels.append(0 if grid.at(column, row) == 100 else 254)
+    image.write_bytes(f"P5\n{grid.width} {grid.height}\n255\n".encode() + pixels)
+    metadata = directory / "localization-map.yaml"
+    metadata.write_text(
+        "image: localization-map.pgm\n"
+        f"resolution: {grid.resolution}\n"
+        f"origin: [{grid.origin.x}, {grid.origin.y}, {grid.origin.yaw}]\n"
+        "negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.25\n",
+        encoding="utf-8",
+    )
+    return metadata

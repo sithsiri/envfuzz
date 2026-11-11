@@ -20,6 +20,7 @@ RUN sed -i 's@http://@https://@g' /etc/apt/sources.list.d/ubuntu.sources \
         ros-jazzy-ros-gz-bridge=1.0.24-* ros-jazzy-ros-gz-sim=1.0.24-* \
         ros-jazzy-navigation2=1.3.13-* ros-jazzy-nav2-bringup=1.3.13-* \
         ros-jazzy-slam-toolbox=2.8.5-* ros-jazzy-nav2-minimal-tb3-sim=1.0.1-* \
+        ros-jazzy-rtabmap-ros=0.23.13-* \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m venv --system-site-packages /opt/envfuzz-venv \

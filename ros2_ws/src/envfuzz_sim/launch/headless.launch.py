@@ -31,7 +31,27 @@ def _add_cliff_sensor(base_link: ET.Element) -> None:
         ET.SubElement(limits, name).text = value
 
 
-def robot_sdf(turtlebot: Path, record_contacts: bool = False, record_cliff: bool = False) -> str:
+def _add_rgbd_camera(base_link: ET.Element) -> None:
+    sensor = ET.SubElement(base_link, "sensor", name="envfuzz_rgbd", type="rgbd_camera")
+    ET.SubElement(sensor, "pose").text = "0.12 0 0.20 0 0 0"
+    ET.SubElement(sensor, "topic").text = "/envfuzz/camera"
+    ET.SubElement(sensor, "always_on").text = "true"
+    ET.SubElement(sensor, "update_rate").text = os.environ.get("ENVFUZZ_CAMERA_HZ", "15")
+    camera = ET.SubElement(sensor, "camera")
+    ET.SubElement(camera, "horizontal_fov").text = "1.0471975512"
+    image = ET.SubElement(camera, "image")
+    ET.SubElement(image, "width").text = os.environ.get("ENVFUZZ_CAMERA_WIDTH", "320")
+    ET.SubElement(image, "height").text = os.environ.get("ENVFUZZ_CAMERA_HEIGHT", "240")
+    ET.SubElement(image, "format").text = "R8G8B8"
+    clip = ET.SubElement(camera, "clip")
+    ET.SubElement(clip, "near").text = "0.1"
+    ET.SubElement(clip, "far").text = "8.0"
+
+
+def robot_sdf(
+    turtlebot: Path, record_contacts: bool = False, record_cliff: bool = False,
+    camera_profile: bool = False,
+) -> str:
     description = xacro.process_file(
         str(turtlebot / "urdf" / "gz_waffle.sdf.xacro"), mappings={"namespace": ""}
     )
@@ -65,6 +85,8 @@ def robot_sdf(turtlebot: Path, record_contacts: bool = False, record_cliff: bool
         ET.SubElement(contact, "topic").text = "/envfuzz/bumper"
     if record_cliff:
         _add_cliff_sensor(base_link)
+    if camera_profile:
+        _add_rgbd_camera(base_link)
     sensor = model.find("./link[@name='base_scan']/sensor")
     if "ENVFUZZ_LIDAR_HZ" in os.environ:
         sensor.find("update_rate").text = os.environ["ENVFUZZ_LIDAR_HZ"]
@@ -102,9 +124,11 @@ def generate_launch_description():
     robot_description = (turtlebot / "urdf" / "turtlebot3_waffle.urdf").read_text(encoding="utf-8")
     world = LaunchConfiguration("world")
     params = LaunchConfiguration("params_file")
+    localization_map = LaunchConfiguration("map")
 
     record_contacts = os.environ.get("ENVFUZZ_RECORD_CONTACTS") == "1"
     record_cliff = os.environ.get("ENVFUZZ_RECORD_CLIFF") == "1"
+    camera_profile = os.environ.get("ENVFUZZ_CAMERA_PROFILE") == "1"
     observation_bridges = []
     if record_contacts:
         observation_bridges.append(Node(
@@ -120,6 +144,16 @@ def generate_launch_description():
             parameters=[{"use_sim_time": True}],
             output="screen",
         ))
+    if camera_profile:
+        observation_bridges.append(Node(
+            package="ros_gz_bridge", executable="parameter_bridge", name="camera_bridge",
+            arguments=[
+                "/envfuzz/camera/image@sensor_msgs/msg/Image[gz.msgs.Image",
+                "/envfuzz/camera/depth_image@sensor_msgs/msg/Image[gz.msgs.Image",
+                "/envfuzz/camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo",
+            ],
+            parameters=[{"use_sim_time": True}], output="screen",
+        ))
 
     return LaunchDescription([
         DeclareLaunchArgument("world", description="Absolute path to the compiled world.sdf"),
@@ -127,6 +161,7 @@ def generate_launch_description():
         DeclareLaunchArgument("y_pose", default_value="0.0"),
         DeclareLaunchArgument("yaw", default_value="0.0"),
         DeclareLaunchArgument("params_file", default_value=str(nav2 / "params" / "nav2_params.yaml")),
+        DeclareLaunchArgument("map", default_value=""),
         AppendEnvironmentVariable("GZ_SIM_RESOURCE_PATH", str(turtlebot / "models")),
         AppendEnvironmentVariable("GZ_SIM_RESOURCE_PATH", str(turtlebot.parent)),
         AppendEnvironmentVariable("GZ_SIM_SYSTEM_PLUGIN_PATH", str(Path(get_package_prefix("envfuzz_sim")) / "lib")),
@@ -134,7 +169,7 @@ def generate_launch_description():
             package="ros_gz_sim", executable="create",
             arguments=[
                 "-world", "envfuzz", "-name", "turtlebot3_waffle",
-                "-string", robot_sdf(turtlebot, record_contacts, record_cliff),
+                "-string", robot_sdf(turtlebot, record_contacts, record_cliff, camera_profile),
                 "-x", LaunchConfiguration("x_pose"), "-y", LaunchConfiguration("y_pose"),
                 "-z", "0.01", "-Y", LaunchConfiguration("yaw"),
             ],
@@ -165,14 +200,31 @@ def generate_launch_description():
             parameters=[{"use_sim_time": True, "robot_description": robot_description}],
             output="screen",
         ),
+        *([IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(str(Path(get_package_share_directory("rtabmap_launch")) /
+                                               "launch" / "rtabmap.launch.py")),
+            launch_arguments={
+                "use_sim_time": "true",
+                "frame_id": "base_link",
+                "rgb_topic": "/envfuzz/camera/image",
+                "depth_topic": "/envfuzz/camera/depth_image",
+                "camera_info_topic": "/envfuzz/camera/camera_info",
+                "approx_sync": "true",
+                "visual_odometry": "true",
+                "rtabmap_viz": "false",
+                "rviz": "false",
+                "delete_db_on_start": "true",
+            }.items(),
+        )] if camera_profile else []),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(nav2 / "launch" / "bringup_launch.py")),
             launch_arguments={
-                "slam": "True",
+                "slam": "False" if camera_profile or os.environ.get("ENVFUZZ_NAVIGATION_BACKEND") == "amcl" else "True",
                 "use_sim_time": "true",
                 "autostart": "true",
                 "use_composition": "False",
                 "params_file": params,
+                "map": localization_map,
             }.items(),
         ),
     ])

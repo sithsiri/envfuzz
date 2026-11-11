@@ -20,6 +20,20 @@ failures get up to `--retries` retries. SQLite indexes attempts and tiers.
 The report retains links to run bundles, and the CSV remains available to
 earlier workflows.
 
+For trusted workers on several hosts, put the frozen campaign output on a
+shared POSIX filesystem, create the plan once with `--plan-only`, then run one
+command per host with a distinct worker ID:
+
+```sh
+envfuzz campaign examples/phase2-campaign.yaml --plan-only --output /shared/pilot
+envfuzz campaign-worker examples/phase2-campaign.yaml --output /shared/pilot --worker-id host-a
+```
+
+The shared claim ledger assigns a bounded lease to each numbered attempt. An
+expired lease can be retried, and the ledger retains every attempt while
+selecting one authoritative result for each case. Single-host `campaign`
+execution remains available.
+
 The analyzer compares strategies at the common completed episode budget for
 each layout. The case signature uses layout, navigation status, map-error
 flag, and terminal position rounded to a one-meter world grid. The JSON

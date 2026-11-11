@@ -90,8 +90,10 @@ surface even at 95% visual transparency.
 
 The thin panel was missed by the sampled rays. The center ray hit its
 backing panel. The glass and dark fixtures still produced front-surface
-returns. Task 2.1 remains open pending a sensor model that represents
-transmission and reflectivity-dependent dropouts in simulation. The
+returns. These native Gazebo results define the boundary of task 2.1: live
+navigation retains the native range and intensity behavior, while
+transmission and reflectivity-dependent dropout checks use the deterministic
+offline reference model. The
 [Gazebo Harmonic renderer source](https://github.com/gazebosim/gz-rendering/blob/gz-rendering8/ogre2/src/Ogre2GpuRays.cc)
 shows how the native pass encodes range and return intensity.
 

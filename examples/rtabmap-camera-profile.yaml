@@ -1,0 +1,6 @@
+version: 1
+navigation_backend: rtabmap
+camera_profile: true
+camera_hz: 15
+camera_width: 320
+camera_height: 240

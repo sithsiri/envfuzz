@@ -14,7 +14,7 @@ import sys
 import time
 from uuid import uuid4
 
-from .maps import save_map_comparison
+from .maps import export_navigation_map, save_map_comparison
 from .oracle import load_baseline, restricted_events
 from .oracle_config import load_oracle
 from .profile import SimulationProfile, load_profile
@@ -22,6 +22,19 @@ from .results import EpisodeResult, write_result_bundle
 from .runner import _terminate
 from .scenario import Scenario, compile_sdf, timeline_moves
 from .scoring import apply_baseline, read_trace
+
+
+def require_camera_capability() -> None:
+    """Reject the optional RGB-D profile unless an NVIDIA GPU is exposed."""
+    executable = shutil.which("nvidia-smi")
+    if executable is None:
+        raise OSError("The RTAB-Map camera profile requires an NVIDIA GPU exposed to the runtime")
+    probe = subprocess.run(
+        [executable, "--query-gpu=name", "--format=csv,noheader"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, check=False,
+    )
+    if probe.returncode != 0 or not probe.stdout.strip():
+        raise OSError("The RTAB-Map camera profile could not detect an exposed NVIDIA GPU")
 
 
 def run_gazebo(
@@ -32,6 +45,8 @@ def run_gazebo(
     if not scenario.goals:
         raise ValueError("A Gazebo mission requires at least one goal")
     profile = load_profile(profile_file)
+    if profile is not None and profile.camera_profile:
+        require_camera_capability()
     world = compile_sdf(scenario, profile)
     baseline = load_baseline(baseline_file) if baseline_file is not None else None
     oracle = load_oracle(oracle_file)
@@ -44,6 +59,9 @@ def run_gazebo(
     (output / "world.sdf").write_text(world, encoding="utf-8")
     (output / "scenario.json").write_text(scenario.canonical_json(), encoding="utf-8")
     resolved_profile = (profile or SimulationProfile()).resolved()
+    localization_map = None
+    if resolved_profile["navigation_backend"] == "amcl":
+        localization_map = export_navigation_map(scenario, output)
     config = {"backend": "gazebo", "timeout": timeout, "watchdog": watchdog,
               "simulation_profile": resolved_profile}
     if params_file is not None:
@@ -58,7 +76,16 @@ def run_gazebo(
     environment.pop("ENVFUZZ_LIDAR_RAYS", None)
     environment.pop("ENVFUZZ_LIDAR_FOV_DEG", None)
     environment.pop("ENVFUZZ_LIDAR_NOISE_M", None)
+    environment.pop("ENVFUZZ_CAMERA_PROFILE", None)
+    environment.pop("ENVFUZZ_CAMERA_HZ", None)
+    environment.pop("ENVFUZZ_CAMERA_WIDTH", None)
+    environment.pop("ENVFUZZ_CAMERA_HEIGHT", None)
     environment["ENVFUZZ_ROBOT_MODEL"] = resolved_profile["robot_model"]
+    environment["ENVFUZZ_NAVIGATION_BACKEND"] = resolved_profile["navigation_backend"]
+    if localization_map is not None:
+        environment["ENVFUZZ_LOCALIZATION_MAP"] = str(localization_map)
+    else:
+        environment.pop("ENVFUZZ_LOCALIZATION_MAP", None)
     observation_flags = ("record_contacts", "record_cliff", "record_motion")
     for flag in observation_flags:
         environment.pop(f"ENVFUZZ_{flag.upper()}", None)
@@ -77,6 +104,13 @@ def run_gazebo(
             environment["ENVFUZZ_LIDAR_FOV_DEG"] = str(profile.lidar_fov_deg)
         if profile.lidar_noise_m is not None:
             environment["ENVFUZZ_LIDAR_NOISE_M"] = str(profile.lidar_noise_m)
+        if profile.camera_profile:
+            environment.update(
+                ENVFUZZ_CAMERA_PROFILE="1",
+                ENVFUZZ_CAMERA_HZ=str(profile.camera_hz),
+                ENVFUZZ_CAMERA_WIDTH=str(profile.camera_width),
+                ENVFUZZ_CAMERA_HEIGHT=str(profile.camera_height),
+            )
         for flag in observation_flags:
             if getattr(profile, flag):
                 environment[f"ENVFUZZ_{flag.upper()}"] = "1"

@@ -8,7 +8,7 @@ import pytest
 
 from envfuzz.campaign import prepare_campaign, run_parallel_campaign
 from envfuzz.campaign_index import render_campaign_report
-from envfuzz.maps import Grid, compare_grids
+from envfuzz.maps import Grid, compare_grids, export_navigation_map
 from envfuzz.results import EpisodeResult
 from envfuzz.scenario import Pose, Scenario, compile_sdf, validate_scenario
 from envfuzz.scoring import recovery_events
@@ -25,6 +25,18 @@ def test_aligned_map_ignores_unknown_and_rotates_cells():
     assert metrics["coverage"] == 1
     estimate.data[3] = -1
     assert compare_grids(reference, estimate)["coverage"] == pytest.approx(2 / 3)
+
+
+def test_navigation_map_export_is_deterministic_and_self_contained(tmp_path):
+    scenario = Scenario()
+    metadata = export_navigation_map(scenario, tmp_path)
+    image = tmp_path / "localization-map.pgm"
+    assert metadata.name == "localization-map.yaml"
+    assert "image: localization-map.pgm" in metadata.read_text()
+    first = image.read_bytes()
+    assert first.startswith(b"P5\n")
+    assert export_navigation_map(scenario, tmp_path).read_bytes() == metadata.read_bytes()
+    assert image.read_bytes() == first
 
 
 def test_recovery_evidence_uses_simulation_window():

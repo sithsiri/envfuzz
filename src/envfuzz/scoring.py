@@ -9,6 +9,8 @@ from pathlib import Path
 
 from .oracle import calibrate, pose_error_events, restricted_events, score_with_baseline, stuck_events
 from .oracle_config import OracleConfig, detectors
+from .maps import reference_grid
+from .profile import load_profile
 from .results import EpisodeEvent, EpisodeResult, PoseSample
 from .scenario import Scenario
 
@@ -23,6 +25,11 @@ def mission_identity(scenario: Scenario, params: Path) -> dict[str, str]:
     profile = params.with_name("profile.yaml")
     if profile.is_file():
         identity["simulation_profile_sha256"] = hashlib.sha256(profile.read_bytes()).hexdigest()
+        if load_profile(profile).resolved()["navigation_backend"] == "amcl":
+            layout = reference_grid(scenario, resolution=0.05).model_dump()
+            identity["localization_map_sha256"] = hashlib.sha256(
+                json.dumps(layout, sort_keys=True).encode()
+            ).hexdigest()
     return identity
 
 

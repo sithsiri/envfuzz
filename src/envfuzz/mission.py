@@ -16,6 +16,7 @@ import time
 
 from action_msgs.msg import GoalStatus
 from ament_index_python.packages import get_package_share_directory
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from lifecycle_msgs.msg import State
 from lifecycle_msgs.srv import GetState
 from nav2_msgs.action import NavigateToPose
@@ -51,7 +52,7 @@ def yaw(rotation) -> float:
 class Mission(Node):
     def __init__(
         self, output: Path, record_scans: bool = False, record_contacts: bool = False,
-        record_cliff: bool = False, record_motion: bool = False,
+        record_cliff: bool = False, record_motion: bool = False, map_localization: bool = False,
     ):
         super().__init__("envfuzz_mission", parameter_overrides=[Parameter("use_sim_time", value=True)])
         self.client = ActionClient(self, NavigateToPose, "/navigate_to_pose")
@@ -75,6 +76,12 @@ class Mission(Node):
         self.latest_map: OccupancyGrid | None = None
         self.recoveries = []
         self.goal_recoveries = 0
+        self.map_localization = map_localization
+        self.last_initial_pose_time: float | None = None
+        self.initial_pose = (
+            self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 1)
+            if map_localization else None
+        )
         self.telemetry = (output / "telemetry.jsonl").open("w", encoding="utf-8", buffering=1)
         self.scans = None
         if record_scans:
@@ -212,6 +219,24 @@ class Mission(Node):
             self.recoveries.append({"sim_time": self.now(), "count": count})
             self.goal_recoveries = count
 
+    def publish_initial_pose(self) -> None:
+        if self.initial_pose is None or self.origin is None:
+            return
+        now = self.now()
+        if self.last_initial_pose_time is not None and now - self.last_initial_pose_time < 0.5:
+            return
+        message = PoseWithCovarianceStamped()
+        message.header.frame_id = "map"
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.pose.pose.position.x = self.origin.x
+        message.pose.pose.position.y = self.origin.y
+        message.pose.pose.orientation.z = math.sin(self.origin.yaw / 2)
+        message.pose.pose.orientation.w = math.cos(self.origin.yaw / 2)
+        message.pose.covariance[0] = message.pose.covariance[7] = 0.25
+        message.pose.covariance[35] = 0.0685
+        self.initial_pose.publish(message)
+        self.last_initial_pose_time = now
+
     def save_map(self) -> None:
         if self.latest_map is None:
             return
@@ -241,6 +266,7 @@ class Mission(Node):
             self.spin(launch)
             if not (self.now() > 0 and self.origin is not None and self.client.server_is_ready()):
                 continue
+            self.publish_initial_pose()
             try:
                 initial = self.transforms.lookup_transform("map", "base_footprint", Time()).transform
             except TransformException:
@@ -333,12 +359,16 @@ def main() -> None:
         nav2 = Path(get_package_share_directory("nav2_bringup"))
         shutil.copyfile(nav2 / "params" / "nav2_params.yaml", params)
     command.append(f"params_file:={params}")
+    localization_map = os.environ.get("ENVFUZZ_LOCALIZATION_MAP")
+    if localization_map:
+        command.append(f"map:={localization_map}")
     rclpy.init(args=[])
     mission = Mission(
         output, record_scans=bool(scenario.get("events") or scenario.get("actors")),
         record_contacts=os.environ.get("ENVFUZZ_RECORD_CONTACTS") == "1",
         record_cliff=os.environ.get("ENVFUZZ_RECORD_CLIFF") == "1",
         record_motion=os.environ.get("ENVFUZZ_RECORD_MOTION") == "1",
+        map_localization=os.environ.get("ENVFUZZ_NAVIGATION_BACKEND") == "amcl",
     )
     try:
         with subprocess.Popen(command) as launch:

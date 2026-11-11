@@ -8,11 +8,11 @@
 
 ## 2. Extend the simulated environment
 
-- [ ] 2.1 Add versioned surface properties and budgeted edits. Check transparent, reflective, dark and thin surface fixtures and reflectivity-dependent observation changes against documented synthetic tolerances. (P3-02)
+- [x] 2.1 Add versioned surface properties and budgeted edits. Check transparent, reflective, dark and thin surface fixtures and reflectivity-dependent observation changes against documented synthetic tolerances using the offline reference model; preserve native Gazebo scans for navigation without requiring live transmission or dropout behavior. (P3-02)
 - [x] 2.2 Add contact and bumper observations. Verify a controlled contact emits the expected timestamped event and update the sensor guide. (P3-03)
 - [x] 2.3 Add simulated cliff sensing and drop geometry. Verify expected ledge observations in a headless fixture and document the configuration. (P3-03)
 - [x] 2.4 Add floor-friction patches and record IMU and wheel-odometry observations. Compare paired runs over a uniform floor and a friction patch and publish the tolerances. (P3-03)
-- [ ] 2.5 Add an optional camera and visual SLAM profile with a capability check. Verify the camera profile on a supported GPU host and the default profile on a CPU-only host. (P3-03)
+- [ ] 2.5 Add an optional RTAB-Map RGB-D camera profile with an NVIDIA GPU capability check. Verify the camera profile on a supported GPU host and the default profile on a CPU-only host. (P3-03)
 - [x] 2.6 Add validated scripted actor paths to the timeline. Replay a fixture to check simulation timestamps and corresponding LiDAR observations. (P3-04)
 
 ## 3. Compare robot and navigation configurations
@@ -35,11 +35,6 @@
 - [ ] 5.4 Test the documented Apple Silicon and WSL2 setup and a low-memory run with a declared budget. Record host, memory use, fidelity changes and native or emulated execution. (P3-12)
 - [ ] 5.5 Run release acceptance across a legacy scenario, a new CPU profile and an organizer evaluation. Record verification evidence and any remaining gap against the Phase 2 replay and speed targets. (P3-09, P3-10, P3-11, P3-12)
 
-## Pause and owner deferrals
+## Resumption
 
-Implementation is paused at the owner's request on November 10, 2026. The 10 completed checkboxes remain the current progress snapshot.
-
-- Task 2.5 remains unchecked. The owner deferred the GPU camera and visual-SLAM work.
-- Task 4.1 remains unchecked. The owner deferred distributed execution and two-host verification.
-- Task 5.4 remains unchecked. The owner deferred the cross-platform acceptance task, including Windows WSL2 verification.
-- Other unchecked tasks remain open. See [progress and evidence](../../../docs/progress.md) for the successes and paused staging work.
+Implementation resumed at the owner's request on November 10, 2026. The remaining GPU camera, multi-host, and cross-platform tasks are active and remain unchecked until their implementation and verification requirements are met.

@@ -3,11 +3,11 @@
 ## ADDED Requirements
 
 ### Requirement: Validated indoor surface and floor models
-The scenario format SHALL accept versioned simulation properties for surface response and floor friction. Seeded edits SHALL respect the same validation and budget rules as other environment changes.
+The scenario format SHALL accept versioned simulation properties for surface response and floor friction. Seeded edits SHALL respect the same validation and budget rules as other environment changes. Surface response SHALL be verified with the deterministic offline reference model; the native Gazebo LiDAR remains the navigation observation source, and material fixtures SHALL NOT require live transmission or reflectivity-based dropout behavior from Gazebo.
 
 #### Scenario: Run a fixed surface fixture
 - **WHEN** a documented synthetic fixture uses transparent, reflective, dark or thin surfaces
-- **THEN** the benchmark records the configured simulated observation and verifies the expected response against its fixture tolerance
+- **THEN** the offline reference probe records the configured synthetic observation and verifies the expected response against its documented fixture tolerance, while live navigation continues to use native Gazebo ranges
 
 #### Scenario: Load an earlier scenario
 - **WHEN** an existing scenario omits material and friction properties

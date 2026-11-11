@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .benchmark import Layout, Sampling, sample_scenarios
 from .campaign_index import refresh_index
+from .claims import ClaimStore
 from .gazebo import run_gazebo
 from .results import EpisodeResult
 from .scenario import Scenario
@@ -192,3 +193,20 @@ def run_parallel_campaign(
                 raise
         refresh_index(output)
         return all(row["classification"] == "behavior" for row in rows)
+
+
+def run_durable_worker(
+    manifest: Campaign, cases: list[Case], output: Path, worker_id: str, limits: WorkerLimits,
+    *, lease_s: float = 600, retries: int = 2,
+) -> int:
+    """Claim and execute all work available to one host from a shared campaign root."""
+    store = ClaimStore(output)
+    store.initialize(len(cases))
+    completed = 0
+    while (claim := store.claim(worker_id, lease_s, retries)) is not None:
+        case = cases[claim.case_id - 1]
+        bundle = output / f"case-{claim.case_id:06d}" / f"attempt-{claim.attempt:06d}" / "bundle"
+        result = run_worker(case.scenario, bundle, manifest.timeout, manifest.watchdog, limits)
+        completed += int(store.complete(claim, worker_id, result, bundle, retries))
+    refresh_index(output)
+    return completed

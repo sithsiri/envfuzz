@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 RobotModel = Literal["turtlebot3_waffle", "compact_vacuum"]
-NavigationBackend = Literal["slam_toolbox"]
+NavigationBackend = Literal["slam_toolbox", "rtabmap", "amcl"]
 
 
 class SimulationProfile(BaseModel):
@@ -25,8 +25,19 @@ class SimulationProfile(BaseModel):
     record_motion: bool | None = None
     robot_model: RobotModel | None = None
     navigation_backend: NavigationBackend | None = None
+    camera_profile: bool = False
+    camera_hz: float = Field(default=15, ge=1, le=30)
+    camera_width: int = Field(default=320, ge=160, le=1920)
+    camera_height: int = Field(default=240, ge=120, le=1080)
     lidar_fov_deg: float | None = Field(default=None, ge=90, le=360)
     lidar_noise_m: float | None = Field(default=None, ge=0, le=0.05)
+
+    @model_validator(mode="after")
+    def camera_requires_rtabmap(self) -> "SimulationProfile":
+        backend = self.navigation_backend or "slam_toolbox"
+        if self.camera_profile != (backend == "rtabmap"):
+            raise ValueError("camera_profile and navigation_backend=rtabmap must be selected together")
+        return self
 
     def resolved(self) -> dict:
         settings = self.model_dump(exclude_none=True)

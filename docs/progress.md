@@ -9,10 +9,10 @@ project owner's request.
 | --- | ---: | --- |
 | Phase 1 MVP | 29/29 checked | CPU-only headless simulation, calibration, scoring and seeded fuzzing verified |
 | Phase 2 navigation benchmark | 15/15 checked | Parallel campaigns, reports, timed edits, regression tools and classroom evaluation implemented |
-| Phase 3 simulation hardening | 10/20 checked | Scripted actors, additional sensors, CPU robot profiles and classroom guides verified |
+| Phase 3 simulation hardening | 11/20 checked | Scripted actors, synthetic material references, additional sensors, CPU robot profiles and classroom guides verified |
 
 Phase 3 changes are present in the project checkout. The current checkout
-passes **53 simulator-free tests**.
+passes **58 simulator-free tests**.
 Six live integration tests are skipped in that host-only command.
 
 [Phase 1 evidence](phase-1-verification.md) ·
@@ -88,9 +88,8 @@ Those fixtures remain diagnostic, and the replay-agreement target remains open.
 
 The surface probe also established the native renderer's behavior. Visual
 transparency changed return intensity while range continued to report the
-front panel. The offline material model now supplies explicit synthetic
-reference observations. Live transmission and dropout behavior remains part
-of the unfinished material task.
+front panel. Task 2.1 now treats the offline material model as the normative
+synthetic reference; live navigation continues to use Gazebo's native scans.
 
 [Replay and material measurements](phase-3-verification.md)
 
@@ -106,9 +105,9 @@ An additional development snapshot is preserved with the paused work.
 | Expanded CI coverage handling | Local scripts and workflow shell syntax were checked. A complete passing instrumented integration rerun remains pending. |
 
 The instrumented integration run recorded two infrastructure watchdog failures.
-Its combined coverage measurement has not been accepted as a completed
-coverage check. Cartographer installation and the three-backend comparison
-also remain unfinished.
+The current simulator-free suite measures 64% source coverage, below the 85%
+target, so coverage has not been accepted as a completed check. The pinned
+runtime camera and three-backend comparison also remain unfinished.
 
 The paused snapshot and its verification outputs are archived under
 `runs/phase3-paused/`. The archive contains pending changes for review and
@@ -116,9 +115,8 @@ resumption. It has not been applied to the checkout.
 
 ## Open work at the pause
 
-- Live LiDAR material effects, the complete alternative-backend comparison,
-  the sampling adoption decision, final coverage and CI acceptance, and
-  published release verification remain open.
+- The complete alternative-backend comparison, final coverage and CI
+  acceptance, and published release verification remain open.
 - GPU camera verification, distributed execution and cross-platform
   acceptance are deferred at the project owner's request. Their OpenSpec
   checkboxes remain unchecked.

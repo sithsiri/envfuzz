@@ -62,7 +62,8 @@ def runtime_versions() -> dict[str, str]:
     if versions["ros"] == "jazzy" and shutil.which("dpkg-query"):
         packages = [
             "ros-jazzy-gz-sim-vendor", "ros-jazzy-ros-gz-bridge", "ros-jazzy-ros-gz-sim",
-            "ros-jazzy-nav2-bringup", "ros-jazzy-slam-toolbox", "ros-jazzy-nav2-minimal-tb3-sim",
+            "ros-jazzy-nav2-bringup", "ros-jazzy-slam-toolbox", "ros-jazzy-rtabmap-ros",
+            "ros-jazzy-nav2-minimal-tb3-sim",
         ]
         output = subprocess.run(
             ["dpkg-query", "-W", "-f=${Package}\t${Version}\n", *packages],

@@ -24,6 +24,10 @@ Profiles SHALL support simulated contact and cliff observations, IMU and odometr
 - **WHEN** an existing scenario runs on a headless CPU worker
 - **THEN** it uses the existing robot and planar LiDAR defaults without requiring camera hardware
 
+#### Scenario: GPU camera profile
+- **WHEN** an organizer selects the RTAB-Map camera profile
+- **THEN** the runtime verifies that an NVIDIA GPU is exposed before launch, starts the Gazebo RGB-D camera and RTAB-Map backend, and records the resolved camera settings in the bundle
+
 #### Scenario: Sensor profile replay
 - **WHEN** a frozen low-profile vacuum fixture crosses a friction patch or approaches a simulated ledge
 - **THEN** the bundle records the enabled sensor observations and the profile required to reproduce the test

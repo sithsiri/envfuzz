@@ -3,6 +3,7 @@ from pathlib import Path
 
 from envfuzz.benchmark import route_exists, sample_scenarios
 from envfuzz.campaign import prepare_campaign, run_campaign
+from envfuzz.claims import ClaimStore
 from envfuzz.results import EpisodeResult
 from envfuzz.scenario import Pose, Scenario, ScenarioObject, Size
 
@@ -54,3 +55,21 @@ def test_campaign_resume_keeps_completed_cases_and_retries_infrastructure(tmp_pa
     with (output / "results.csv").open(encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     assert [row["status"] for row in rows] == ["completed", "completed"]
+
+
+def test_durable_claims_recover_expired_work_and_choose_one_authoritative_result(tmp_path, monkeypatch):
+    (tmp_path / "plan.json").write_text('{"cases": []}')
+    store = ClaimStore(tmp_path)
+    store.initialize(1)
+    monkeypatch.setattr("envfuzz.claims.time.time", lambda: 100.0)
+    first = store.claim("lost-host", lease_s=1, retries=1)
+    monkeypatch.setattr("envfuzz.claims.time.time", lambda: 102.0)
+    recovered = store.claim("recovered-host", lease_s=10, retries=1)
+    assert (first.case_id, first.attempt) == (1, 1)
+    assert (recovered.case_id, recovered.attempt) == (1, 2)
+    bundle = tmp_path / "case-000001" / "attempt-000002" / "bundle"
+    bundle.mkdir(parents=True)
+    result = EpisodeResult(status="completed", classification="behavior")
+    assert store.complete(recovered, "recovered-host", result, bundle, retries=1)
+    assert not store.complete(first, "lost-host", result, bundle, retries=1)
+    assert store.complete_count() == 1

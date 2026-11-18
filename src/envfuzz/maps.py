@@ -165,3 +165,29 @@ def export_navigation_map(scenario: Scenario, directory: Path, resolution: float
         encoding="utf-8",
     )
     return metadata
+
+
+def export_keepout_filter_map(scenario: Scenario, directory: Path, resolution: float = 0.05) -> Path:
+    """Write a Nav2 filter mask aligned with the deterministic navigation map."""
+    from .scenario import _inside
+
+    if not scenario.restricted_zones:
+        raise ValueError("Keepout Filter requires at least one restricted zone")
+    grid = reference_grid(scenario, resolution=resolution)
+    image = directory / "keepout-filter.pgm"
+    pixels = bytearray()
+    for row in range(grid.height - 1, -1, -1):
+        for column in range(grid.width):
+            x, y = grid.center(column, row)
+            blocked = any(_inside(x, y, zone.polygon) for zone in scenario.restricted_zones)
+            pixels.append(0 if blocked else 254)
+    image.write_bytes(f"P5\n{grid.width} {grid.height}\n255\n".encode() + pixels)
+    metadata = directory / "keepout-filter.yaml"
+    metadata.write_text(
+        "image: keepout-filter.pgm\n"
+        f"resolution: {grid.resolution}\n"
+        f"origin: [{grid.origin.x}, {grid.origin.y}, {grid.origin.yaw}]\n"
+        "negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.25\n",
+        encoding="utf-8",
+    )
+    return metadata

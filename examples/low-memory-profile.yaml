@@ -1,0 +1,9 @@
+# Reduced-resource CPU profile for low-memory hosts. Data-only: it uses
+# existing SimulationProfile fields and keeps the default robot, slam_toolbox
+# backend, 1 ms physics step and real-time factor. It halves the LiDAR rays
+# (360 -> 180) and lowers the scan rate (5 -> 4 Hz) to cut scan, SLAM and
+# costmap processing. Draft: no measured run has used this profile yet, so
+# its memory and fidelity limits are not established.
+version: 1
+lidar_rays: 180
+lidar_hz: 4

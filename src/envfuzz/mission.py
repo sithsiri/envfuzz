@@ -14,6 +14,8 @@ import subprocess
 import sys
 import time
 
+import yaml
+
 from action_msgs.msg import GoalStatus
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseWithCovarianceStamped
@@ -358,6 +360,26 @@ def main() -> None:
     if not params.is_file():
         nav2 = Path(get_package_share_directory("nav2_bringup"))
         shutil.copyfile(nav2 / "params" / "nav2_params.yaml", params)
+    if os.environ.get("ENVFUZZ_KEEPOUT_FILTER_MASK"):
+        nav2_params = yaml.safe_load(params.read_text(encoding="utf-8"))
+        for costmap in ("local_costmap", "global_costmap"):
+            settings = nav2_params[costmap][costmap]["ros__parameters"]
+            settings["filters"] = [
+                *settings.get("filters", []), "keepout_filter", "keepout_inflation_layer",
+            ]
+            settings["keepout_filter"] = {
+                "plugin": "nav2_costmap_2d::KeepoutFilter",
+                "enabled": True,
+                "filter_info_topic": "/costmap_filter_info",
+                "transform_tolerance": 0.1,
+            }
+            settings["keepout_inflation_layer"] = {
+                "plugin": "nav2_costmap_2d::InflationLayer",
+                "enabled": True,
+                "inflation_radius": 0.5,
+                "cost_scaling_factor": 3.0,
+            }
+        params.write_text(yaml.safe_dump(nav2_params, sort_keys=False), encoding="utf-8")
     command.append(f"params_file:={params}")
     localization_map = os.environ.get("ENVFUZZ_LOCALIZATION_MAP")
     if localization_map:

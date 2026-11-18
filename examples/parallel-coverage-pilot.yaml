@@ -1,0 +1,7 @@
+# Small rerun check for the longer mission and wall-clock limits.
+layouts: [apartment, corridor, open_room]
+methods: [uniform, stratified, coverage]
+seeds: [42]
+episodes_per_cell: 3
+timeout: 35
+watchdog: 180

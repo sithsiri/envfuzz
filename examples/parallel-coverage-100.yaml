@@ -1,0 +1,7 @@
+# Broad navigation fuzzing campaign: 100 generated episodes per layout/sampler cell.
+layouts: [apartment, corridor, open_room]
+methods: [uniform, stratified, coverage]
+seeds: [42]
+episodes_per_cell: 100
+timeout: 35
+watchdog: 180

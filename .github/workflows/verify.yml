@@ -5,7 +5,14 @@ name: Verify EnvFuzz
   schedule:
     - cron: '23 3 * * *'
   workflow_dispatch:
+    inputs:
+      nightly:
+        description: Also run the nightly campaign, fixture replays and benchmark checks
+        type: boolean
+        default: false
 
+# An explicit `shell: bash` runs steps as `bash --noprofile --norc -eo pipefail`,
+# so a failing command piped into `tee` still fails its step.
 defaults:
   run:
     shell: bash
@@ -21,46 +28,95 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - run: python -m pip install -e '.[test]' coverage
-      - run: make lint
-      - run: |
-          python -m coverage run --source=envfuzz -m pytest -m 'not integration'
-          python -m coverage report
-          python -m coverage xml
+      - run: python -m pip install -e '.[test,lint]'
+      - run: make lint PYTHON=python
+      - name: Unit and property tests
+        run: |
+          mkdir -p runs/ci/unit
+          python -m coverage run -m pytest -m 'not integration' \
+            --junitxml runs/ci/unit/junit.xml 2>&1 | tee runs/ci/unit/pytest.log
+      - name: Coverage gate
+        # fail_under in pyproject.toml is the single coverage gate.
+        run: |
+          python -m coverage xml --fail-under 0 -o runs/ci/unit/coverage.xml
+          python -m coverage report | tee runs/ci/unit/coverage.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: unit-coverage
-          path: coverage.xml
+          name: unit-evidence
+          path: runs/ci/unit
+          if-no-files-found: warn
   headless:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      NIGHTLY: ${{ github.event_name == 'schedule' || inputs.nightly == true }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
-        if: github.event_name == 'schedule'
+        if: env.NIGHTLY == 'true'
         with:
           python-version: '3.12'
       - run: mkdir -p runs/ci
       - name: Build CPU runtime
         run: docker build --progress plain -t envfuzz:ci . 2>&1 | tee runs/ci/build.log
       - name: Headless integration
+        # pytest's basetemp is created 0700 by root, so it stays in the container's
+        # /tmp and is copied out with readable permissions afterwards.
         run: |
           docker run --rm --network none --cpus 2 --memory 3g \
             -v "$PWD/runs/ci:/verification" --entrypoint bash envfuzz:ci -c '
               source /opt/ros/jazzy/setup.bash && source /opt/envfuzz-sim/local_setup.bash &&
-              unset DISPLAY &&
-              ENVFUZZ_GAZEBO_TEST=1 python -m pytest -m integration --basetemp /verification/pytest
+              unset DISPLAY
+              status=0
+              ENVFUZZ_GAZEBO_TEST=1 python -m pytest -m integration --basetemp /tmp/pytest \
+                --junitxml /verification/integration-junit.xml || status=$?
+              cp -r /tmp/pytest /verification/integration-pytest 2>/dev/null || true
+              chmod -R a+rwX /verification
+              exit "$status"
             ' 2>&1 | tee runs/ci/integration.log
+      - name: Install host CLI
+        id: install
+        if: env.NIGHTLY == 'true'
+        run: python -m pip install -e .
       - name: Nightly campaign and replay diagnostics
-        if: github.event_name == 'schedule'
+        if: steps.install.outcome == 'success'
         run: |
-          python -m pip install -e .
-          envfuzz campaign examples/phase2-campaign.yaml --workers 2 --image envfuzz:ci --output runs/ci/pilot
-          envfuzz analyze runs/ci/pilot --replays 3 --workers 2 --image envfuzz:ci
-          python docker/check_replay.py runs/ci/pilot --minimum-real-time-factor 0.1
+          start=$SECONDS
+          envfuzz campaign examples/phase2-campaign.yaml --workers 2 --image envfuzz:ci \
+            --output runs/ci/pilot 2>&1 | tee runs/ci/campaign.log
+          echo "$((SECONDS - start))" > runs/ci/campaign-wall-seconds.txt
+          envfuzz analyze runs/ci/pilot --replays 3 --workers 2 --image envfuzz:ci \
+            2>&1 | tee runs/ci/analyze.log
+      - name: Frozen fixture replays
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          python docker/replay_fixtures.py --corpus benchmarks/replay-corpus.json \
+            --fixtures benchmarks/replay-fixtures --work runs/ci/fixture-replays \
+            --workers 2 --image envfuzz:ci 2>&1 | tee runs/ci/fixture-replays.log
+      - name: Fix evidence ownership
+        # Worker and integration containers run as root and write into runs/ci.
+        if: always()
+        run: |
+          if [[ -d runs/ci ]]; then sudo chown -R "$(id -u):$(id -g)" runs/ci; fi
+      - name: Required replay tolerance
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          python docker/check_replay.py --corpus benchmarks/replay-corpus.json \
+            --fixtures benchmarks/replay-fixtures --results runs/ci/fixture-replays/results.json \
+            --output runs/ci/replay-tolerance.json
+      - name: Benchmark regression
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          wall=()
+          if [[ -s runs/ci/campaign-wall-seconds.txt ]]; then
+            wall=(--campaign-wall-seconds "$(< runs/ci/campaign-wall-seconds.txt)")
+          fi
+          python docker/check_benchmark.py runs/ci/pilot \
+            --thresholds benchmarks/nightly-thresholds.json "${wall[@]}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: headless-evidence
           path: runs/ci
+          if-no-files-found: warn

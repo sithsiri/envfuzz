@@ -1,8 +1,15 @@
 # CPU robot and navigation profiles
 
 Profiles are version 1 YAML files chosen by the organizer or local operator.
-The currently supported navigation backend is `slam_toolbox`. The robot
-allowlist includes the default `turtlebot3_waffle` and `compact_vacuum`.
+The robot allowlist includes the default `turtlebot3_waffle` and
+`compact_vacuum`. The navigation backends are:
+
+| Backend | Selected by | Hardware | Status |
+| --- | --- | --- | --- |
+| `slam_toolbox` | Default (no profile) | CPU | Supported |
+| `amcl` | `examples/amcl-localization-profile.yaml` | CPU | Live-verified, see the [backend comparison](phase-3-backend-comparison.md) |
+| `rtabmap_lidar` | `examples/rtabmap-lidar-profile.yaml` | CPU, no camera | Implemented, live verification pending |
+| `rtabmap` | `examples/rtabmap-camera-profile.yaml` | NVIDIA GPU, RGB-D camera | Optional and GPU-gated |
 
 | Profile | Collision chassis | LiDAR | Bumper |
 | --- | --- | --- | --- |
@@ -42,7 +49,18 @@ profile. Use separate baselines when changing robot or sensor settings.
 deterministic occupancy map from the static scenario layout and archives its
 PGM image and map-server YAML in the run bundle. AMCL starts Nav2 with that
 map instead of `slam_toolbox`. It needs a fresh matching baseline. The
-comparison and pinned-runtime smoke evidence are still pending.
+pinned-runtime comparison is in the
+[backend comparison record](phase-3-backend-comparison.md).
+
+## Lidar-only RTAB-Map profile
+
+`examples/rtabmap-lidar-profile.yaml` selects `rtabmap_lidar`. This is the CPU
+alternative SLAM backend. RTAB-Map runs on the planar `/scan` and wheel
+odometry, using ICP registration constrained to three degrees of freedom. It
+has no camera and no GPU requirement. RTAB-Map supplies `/map` and the
+`map` → `odom` transform, and Nav2 starts without SLAM Toolbox, AMCL or a map
+server. The profile cannot enable `camera_profile`, and it needs a fresh
+matching baseline. Live verification in the pinned runtime is pending.
 
 ## Optional RTAB-Map camera profile
 

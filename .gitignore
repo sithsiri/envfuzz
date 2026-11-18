@@ -7,4 +7,11 @@ runs/
 dist/
 build/
 .DS_Store
+HANDOFF.md
 
+.coverage
+.coverage.*
+coverage.xml
+junit*.xml
+*-junit.xml
+.ruff_cache/

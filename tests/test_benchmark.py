@@ -70,6 +70,7 @@ def test_durable_claims_recover_expired_work_and_choose_one_authoritative_result
     bundle = tmp_path / "case-000001" / "attempt-000002" / "bundle"
     bundle.mkdir(parents=True)
     result = EpisodeResult(status="completed", classification="behavior")
+    (bundle / "result.json").write_text(result.model_dump_json())
     assert store.complete(recovered, "recovered-host", result, bundle, retries=1)
     assert not store.complete(first, "lost-host", result, bundle, retries=1)
     assert store.complete_count() == 1

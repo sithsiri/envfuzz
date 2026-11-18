@@ -3,6 +3,7 @@ name: Release images
   release:
     types: [published]
 
+# An explicit `shell: bash` runs steps as `bash --noprofile --norc -eo pipefail`.
 defaults:
   run:
     shell: bash
@@ -11,6 +12,9 @@ permissions:
   contents: read
 
 jobs:
+  # Builds and smoke-tests each architecture natively. Only an immutable
+  # candidate tag is pushed here; version tags are created by `publish`
+  # after both architectures pass.
   architecture:
     strategy:
       fail-fast: false
@@ -28,44 +32,101 @@ jobs:
     env:
       RELEASE_VERSION: ${{ github.event.release.tag_name }}
       IMAGE_ARCH: ${{ matrix.architecture }}
+      SMOKE_CPUS: '2'
+      SMOKE_MEMORY: 3g
     steps:
       - uses: actions/checkout@v6
-      - name: Build and verify native image
+      - name: Build native image
         run: |
           mkdir -p release-evidence
-          image="ghcr.io/${GITHUB_REPOSITORY,,}:$RELEASE_VERSION-$IMAGE_ARCH"
-          docker build --platform "linux/$IMAGE_ARCH" --tag "$image" \
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker build --platform "linux/$IMAGE_ARCH" \
+            --tag "$repository:$RELEASE_VERSION-$IMAGE_ARCH" \
+            --tag "$repository:candidate-$GITHUB_SHA-$IMAGE_ARCH" \
             --label "org.opencontainers.image.version=$RELEASE_VERSION" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" .
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" . \
+            2>&1 | tee release-evidence/build.log
+      - name: Smoke run
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:$RELEASE_VERSION-$IMAGE_ARCH"
           docker run --rm --network none "$image" doctor > release-evidence/versions.json
-          docker run --rm --network none --cpus 2 --memory 3g \
+          docker run --rm --network none --cpus "$SMOKE_CPUS" --memory "$SMOKE_MEMORY" \
             -v "$PWD/release-evidence:/verification" "$image" \
-            run examples/scenario.yaml --timeout 20 --watchdog 100 --output /verification/smoke
-      - name: Publish verified architecture
+            run examples/scenario.yaml --timeout 20 --watchdog 100 --output /verification/smoke \
+            2>&1 | tee release-evidence/smoke.log
+      - name: Fix evidence ownership
+        # The smoke container runs as root and writes into release-evidence.
+        if: always()
+        run: |
+          if [[ -d release-evidence ]]; then sudo chown -R "$(id -u):$(id -g)" release-evidence; fi
+      - name: Write release manifest
+        run: |
+          python3 docker/release_evidence.py manifest \
+            --versions release-evidence/versions.json \
+            --smoke-result release-evidence/smoke/result.json \
+            --tag "$RELEASE_VERSION" --revision "$GITHUB_SHA" --architecture "$IMAGE_ARCH" \
+            --image "ghcr.io/${GITHUB_REPOSITORY,,}:$RELEASE_VERSION-$IMAGE_ARCH" \
+            --cpus "$SMOKE_CPUS" --memory "$SMOKE_MEMORY" \
+            --output "release-evidence/envfuzz-$RELEASE_VERSION-$IMAGE_ARCH-manifest.json"
+      - name: Push verified candidate
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          docker push "ghcr.io/${GITHUB_REPOSITORY,,}:$RELEASE_VERSION-$IMAGE_ARCH"
+          docker push "ghcr.io/${GITHUB_REPOSITORY,,}:candidate-$GITHUB_SHA-$IMAGE_ARCH"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: release-evidence-${{ matrix.architecture }}
           path: release-evidence
-  manifest:
+  publish:
     needs: architecture
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      contents: write
       packages: write
     env:
       RELEASE_VERSION: ${{ github.event.release.tag_name }}
-      GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Publish multi-architecture manifest
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-evidence-*
+          path: release-evidence
+      - name: Publish version tags
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          candidate="$repository:candidate-$GITHUB_SHA"
+          for arch in amd64 arm64; do
+            docker buildx imagetools create --tag "$repository:$RELEASE_VERSION-$arch" "$candidate-$arch"
+          done
+          docker buildx imagetools create --tag "$repository:$RELEASE_VERSION" \
+            "$candidate-amd64" "$candidate-arm64"
+          docker buildx imagetools inspect "$repository:$RELEASE_VERSION" \
+            | tee "release-evidence/envfuzz-$RELEASE_VERSION-image-index.txt"
+      - name: Attach version manifests and publish release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
           image="ghcr.io/${GITHUB_REPOSITORY,,}:$RELEASE_VERSION"
-          docker buildx imagetools create --tag "$image" "$image-amd64" "$image-arm64"
-          docker buildx imagetools inspect "$image"
+          manifests=(release-evidence/release-evidence-*/envfuzz-*-manifest.json)
+          if (( ${#manifests[@]} != 2 )) || [[ ! -f ${manifests[0]} ]]; then
+            echo "::error::Expected one verified manifest per architecture"
+            exit 1
+          fi
+          gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --json body \
+            --jq '.body // ""' > current-notes.md
+          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$RELEASE_VERSION" \
+            --jq .body > generated-notes.md
+          manifest_args=()
+          for manifest in "${manifests[@]}"; do manifest_args+=(--manifest "$manifest"); done
+          python3 docker/release_evidence.py notes --current current-notes.md \
+            --generated generated-notes.md "${manifest_args[@]}" --image "$image" \
+            --output release-notes.md
+          gh release upload "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --clobber \
+            "${manifests[@]}" "release-evidence/envfuzz-$RELEASE_VERSION-image-index.txt"
+          gh release edit "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md

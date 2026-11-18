@@ -7,3 +7,9 @@ log
 .pytest_cache
 **/__pycache__
 **/*.egg-info
+.coverage
+.coverage.*
+coverage.xml
+junit*.xml
+*-junit.xml
+.ruff_cache

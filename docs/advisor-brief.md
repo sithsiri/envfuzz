@@ -1,6 +1,6 @@
 # EnvFuzz project brief for advisor feedback
 
-**Prepared November 11, 2026**  
+**Prepared November 17, 2026**
 **Purpose:** summarize implementation phases and preliminary experimental evidence; request guidance on the next research question.
 
 ## Project summary
@@ -16,6 +16,70 @@ EnvFuzz is a ROS 2 Jazzy / Gazebo Harmonic framework for testing indoor robot na
 | **3 — Simulation hardening** | 11/20 tasks checked | Scripted actors, material and sensor fixtures, motion/contact/cliff observations, robot profiles, AMCL, and classroom guidance. The remaining checklist includes replay/coverage acceptance, alternative-backend comparison, GPU camera verification, and release work. |
 
 The project status and detailed records are in [progress](progress.md), [Phase 1 verification](phase-1-verification.md), [Phase 2 verification](phase-2-verification.md), and [Phase 3 verification](phase-3-verification.md).
+
+## November parallel campaign results
+
+The campaign planned 900 generated scenarios: 100 per layout/sampler cell across apartment, corridor, and open-room layouts and uniform, stratified, and coverage sampling. Sixteen Docker workers ran the batch. The container produced results, but the host initially could not rename the root-owned output folders into place. That packaging error triggered two retries per case, so the recovered data contains **2,700 actual episode attempts**: three runs of each of the 900 generated scenarios. These are repeated attempts on the same scenario, not 2,700 independent scenarios.
+
+The bundles were recovered by copying each preserved container output into its canonical attempt folder. All 2,700 attempt bundles are now indexed, and host-side finalization errors were retained in each bundle for audit. The recovered attempt-level data is [attempt-results-recovered.csv](../runs/parallel-coverage-100-20261111/attempt-results-recovered.csv); [results.csv](../runs/parallel-coverage-100-20261111/results.csv) summarizes the last attempt for each planned scenario. The original failure-only summary remains available as [results-host-finalization-failures.csv](../runs/parallel-coverage-100-20261111/results-host-finalization-failures.csv). The campaign plan is in [the campaign directory](../runs/parallel-coverage-100-20261111/), and its manifest is [parallel-coverage-100.yaml](../examples/parallel-coverage-100.yaml).
+
+| Attempt outcome | Count | Share of all 2,700 attempts |
+|---|---:|---:|
+| Goal completed | 2,467 | 91.4% |
+| Mission failed | 36 | 1.3% |
+| Timed out | 2 | 0.1% |
+| Watchdog / infrastructure | 195 | 7.2% |
+
+Among the 2,505 behavior-classified attempts, 2,467 reached the goal (98.5%). Completed runs had a median path length of 3.87 m. Every recovered result had score 0, no recorded oracle events, and no baseline hash, so these are direct mission outcomes rather than baseline-scored findings.
+
+| Dimension | Category | Completed | Mission failed or timed out | Watchdog |
+|---|---|---:|---:|---:|
+| Layout | Apartment | 837 | 0 | 63 |
+| Layout | Corridor | 769 | 37 | 94 |
+| Layout | Open room | 861 | 1 | 38 |
+| Sampler | Uniform | 827 | 7 | 66 |
+| Sampler | Stratified | 839 | 9 | 52 |
+| Sampler | Coverage | 801 | 22 | 77 |
+
+The 195 watchdogs all reached the configured 80-second wall limit (median 80.47 s). Forty-two produced no ground-truth telemetry, consistent with startup/readiness stalls. The other 153 had telemetry: their median final simulated timestamp was 23.4 s, and 145 show more than 0.5 m of travel. Their logs also include Nav2 `Failed to make progress` messages in 100 attempts, transform waits in 152, and lifecycle-service timeouts in 7; these signatures overlap. This points to a mix of slow or stalled startup and navigation, with the fixed wall limit likely too tight for some simulations at 16-way concurrency. Watchdogs remain infrastructure classifications in the result schema, so they should not be counted as confirmed navigation failures.
+
+![Recovered status counts across all 2,700 episode attempts, broken down by layout and sampling method.](figures/parallel-coverage-100-outcomes.png)
+
+At the planned-scenario level, the last attempt ended with 826 completed missions, 12 mission failures, one timeout, and 61 watchdog failures. The full attempt-level distribution above includes earlier retries and is the better description of observed episode outcomes. The watchdog count is an infrastructure limit and should not be read as a Nav2 collision or planning failure. The output-ownership issue is now handled in the worker: it attempts the normal rename, then copies the readable bundle if rename fails with a permission or cross-device error, leaving the original container output intact.
+
+These results provide a broad run of generated navigation scenarios, but they do not isolate the Keepout Filter, dynamic obstacles, or LiDAR changes tested in the separate pilots. The repeated attempts also share each scenario input, and the campaign had no scoring baseline; treat the rates as descriptive evidence for this setup rather than as an independent-sample comparison or a regression claim.
+
+### Tuned rerun, November 17
+
+To reduce the wall-clock stalls, I ran the same 900 planned scenarios with a 35-second simulation-time mission limit, a 180-second wall watchdog, and eight workers capped at two CPUs each. A 27-case pilot completed all 27 goals without a watchdog. In the full run, all 900 planned cases now have a behavior result and complete metrics; there are no final infrastructure-classified cases.
+
+| Final case outcome | Count | Share |
+|---|---:|---:|
+| Goal completed | 852 | 94.7% |
+| Simulation-time mission limit | 36 | 4.0% |
+| Nav2 mission failure | 12 | 1.3% |
+
+There were 919 attempts in total because 19 first attempts hit the wall watchdog and were retried. The retries all produced behavior results: 17 completed, one timed out, and one failed. The watchdog-attempt rate was 2.1% (19/919), down from 7.2% (195/2,700) in the initial run; the settings changed together, so this is an operational comparison rather than a controlled attribution to one setting.
+
+| Layout | Completed | Simulation timeout | Mission failed | Median path (m) | Median position RMSE (m) |
+|---|---:|---:|---:|---:|---:|
+| Apartment | 288/300 | 12 | 0 | 3.81 | 0.0062 |
+| Corridor | 268/300 | 20 | 12 | 4.08 | 0.0103 |
+| Open room | 296/300 | 4 | 0 | 3.81 | 0.0052 |
+
+| Sampler | Completed | Simulation timeout | Mission failed | Scenario categories covered | Candidate failure signatures |
+|---|---:|---:|---:|---:|---:|
+| Uniform | 284/300 | 14 | 2 | 79/81 | 11 |
+| Stratified | 289/300 | 8 | 3 | 81/81 | 8 |
+| Coverage-guided | 279/300 | 14 | 7 | 81/81 | 13 |
+
+The built-in analyzer found 23 unique timeout/mission-failure signatures across the methods. These are candidates for investigation, not confirmed regressions; they have not been replay-validated. Completion ranged from 100% (87 cases) for 2.5 m goals with two clutter objects to 88.5% (96 cases) for 6 m goals with six objects, suggesting the longer, more cluttered cases deserve follow-up.
+
+![Final outcomes by layout and sampling method in the tuned campaign.](figures/parallel-coverage-100-tuned-outcomes.png)
+
+![Goal-completion rates by clutter and requested goal distance.](figures/parallel-coverage-100-tuned-complexity.png)
+
+The full case summary is [results.csv](../runs/parallel-coverage-100-tuned-20261117/results.csv), all 919 attempt rows are in [attempt-results.csv](../runs/parallel-coverage-100-tuned-20261117/attempt-results.csv), and the built-in coverage/signature summary is [analysis.json](../runs/parallel-coverage-100-tuned-20261117/analysis.json). Each case has path length, pose RMSE, recovery count, telemetry coverage, scenario complexity bins, and selected Nav2/TF/lifecycle log counts. No baseline was calibrated for these varied start/goal scenarios, so scores and oracle events are explicitly marked as not evaluated rather than recorded as zero. The next useful step is to calibrate matching baselines for a smaller set of fixed missions, then replay the 23 candidate signatures under the same limits.
 
 ## Preliminary experiments
 

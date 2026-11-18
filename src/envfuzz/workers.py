@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import errno
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import time
 
@@ -27,6 +29,24 @@ class WorkerLimits:
 def worker_deadline(watchdog: float) -> float:
     """Longest wall-clock time run_worker can hold an attempt, including container cleanup."""
     return watchdog + CONTAINER_GRACE_S + INSPECT_TIMEOUT_S + REMOVE_TIMEOUT_S
+
+
+def deliver_output_bundle(delivered: Path, bundle: Path) -> Path:
+    """Move a container bundle into place, copying it when ownership blocks rename.
+
+    Docker commonly writes bind-mounted output as root. The host can read those
+    files but may not be allowed to rename their directory. A copy produces
+    host-owned files while leaving the original output intact for recovery.
+    """
+    try:
+        delivered.replace(bundle)
+    except OSError as error:
+        if error.errno not in (errno.EACCES, errno.EPERM, errno.EXDEV):
+            raise
+        if bundle.exists() or not delivered.is_dir():
+            raise
+        shutil.copytree(delivered, bundle, symlinks=True)
+    return bundle
 
 
 def container_name(bundle: Path) -> str:
@@ -101,7 +121,7 @@ def run_worker(
                                        check=False, timeout=watchdog + CONTAINER_GRACE_S)
         delivered = results / bundle.name
         if delivered.exists():
-            delivered.replace(bundle)
+            deliver_output_bundle(delivered, bundle)
         result = bundle / "result.json"
         if result.is_file():
             return EpisodeResult.model_validate_json(result.read_text(encoding="utf-8"))

@@ -6,6 +6,7 @@ import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 from queue import SimpleQueue
@@ -23,7 +24,7 @@ from .claims import LEDGER_FILENAME, ClaimStore, verified_attempt
 from .gazebo import run_gazebo
 from .results import EpisodeResult
 from .scenario import Scenario
-from .workers import WorkerLimits, remove_worker, run_worker, worker_deadline
+from .workers import WorkerLimits, deliver_output_bundle, remove_worker, run_worker, worker_deadline
 
 LEASE_SAFETY_MARGIN_S = 15.0
 DEFAULT_MAX_CONSECUTIVE_FAILURES = 3
@@ -134,12 +135,65 @@ def run_campaign(manifest: Campaign, cases: list[Case], output: Path) -> bool:
 def _summary_row(index: int, case: Case, output: Path, bundle: Path | None, result: EpisodeResult) -> dict:
     metrics_path = bundle / "metrics.json" if bundle is not None else None
     metrics = json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path and metrics_path.is_file() else {}
+    challenge = case.scenario.challenge
+    route_distance = sum(
+        math.hypot(right.x - left.x, right.y - left.y)
+        for left, right in zip([case.scenario.start, *case.scenario.goals[:-1]], case.scenario.goals)
+    )
+    path_length = metrics.get("path_length_m")
+    path_ratio = path_length / route_distance if path_length and route_distance > 0 else ""
+    telemetry_records, telemetry_sim_end = 0, None
+    telemetry_path = bundle / "telemetry.jsonl" if bundle is not None else None
+    if telemetry_path is not None and telemetry_path.is_file():
+        with telemetry_path.open(encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    ground_truth = json.loads(line).get("ground_truth")
+                except (json.JSONDecodeError, AttributeError):
+                    continue
+                if ground_truth is not None:
+                    telemetry_records += 1
+                    timestamp = ground_truth.get("sim_time")
+                    if isinstance(timestamp, (int, float)):
+                        telemetry_sim_end = max(telemetry_sim_end or timestamp, timestamp)
+    logs_path = bundle / "logs.txt" if bundle is not None else None
+    logs = logs_path.read_text(encoding="utf-8", errors="replace").splitlines() if (
+        logs_path is not None and logs_path.is_file()
+    ) else []
+    baseline_scored = result.baseline_sha256 is not None
     return {
         "case": index, "layout": case.layout, "method": case.method, "seed": case.scenario.seed,
         "scenario_hash": case.scenario.content_hash(), "status": result.status,
         "classification": result.classification, "sim_duration_s": result.sim_duration,
-        "wall_duration_s": result.wall_duration, "path_length_m": metrics.get("path_length_m"),
+        "real_time_factor": result.real_time_factor, "wall_duration_s": result.wall_duration,
+        "scenario_route_straightline_m": route_distance, "path_length_m": path_length,
+        "path_to_straightline_ratio": path_ratio,
+        "challenge_width_bin": challenge.get("width_bin", ""),
+        "challenge_clutter_count": challenge.get("clutter_count", ""),
+        "challenge_goal_distance_bin": challenge.get("goal_distance_bin", ""),
+        "goal_count": metrics.get("goal_count", len(case.scenario.goals)),
         "position_rmse_m": metrics.get("position_rmse_m"), "goals_reached": metrics.get("goals_reached"),
+        "ground_truth_samples": metrics.get("ground_truth_samples", ""),
+        "paired_pose_samples": metrics.get("paired_pose_samples", ""),
+        "recovery_count": len(metrics.get("recoveries", [])),
+        "mission_wall_duration_s": metrics.get("mission_wall_duration_s", ""),
+        "mission_real_time_factor": metrics.get("mission_real_time_factor", ""),
+        "telemetry_records": telemetry_records, "telemetry_sim_end_s": telemetry_sim_end or "",
+        "controller_no_progress_messages": sum("Failed to make progress" in line for line in logs),
+        "transform_wait_messages": sum("Timed out waiting for transform" in line for line in logs),
+        "lifecycle_service_timeouts": sum(
+            "failed to send response" in line and "timeout" in line.lower() for line in logs
+        ),
+        "baseline_scored": baseline_scored,
+        "score_status": "scored" if baseline_scored else "not_scored_no_baseline",
+        "event_evaluation_status": (
+            "baseline_oracle" if baseline_scored else
+            "restricted_area_only" if case.scenario.restricted_zones else "not_evaluated_no_baseline"
+        ),
+        "score": result.score if baseline_scored else "",
+        "tiers_hit": json.dumps(result.tiers_hit) if baseline_scored else "",
+        "events_json": json.dumps([event.model_dump(mode="json") for event in result.events]),
+        "reason": result.reason or "",
         "bundle": bundle.relative_to(output).as_posix() if bundle is not None else "",
     }
 
@@ -159,7 +213,7 @@ def _execute_case(
             remove_worker(bundle)
             delivered = attempt / "outputs" / bundle.name
             if not bundle.exists() and delivered.exists():
-                delivered.replace(bundle)
+                deliver_output_bundle(delivered, bundle)
         if not result_path.is_file():
             result = EpisodeResult(status="interrupted", classification="interrupted",
                                    reason="Previous scheduler stopped before the attempt completed")

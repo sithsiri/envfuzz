@@ -20,6 +20,17 @@ failures get up to `--retries` retries. SQLite indexes attempts and tiers.
 The report retains links to run bundles, and the CSV remains available to
 earlier workflows.
 
+Campaign CSV rows include mission status, simulation and wall durations, direct
+scenario route distance, observed path-to-distance ratio, scenario complexity bins, goal
+completion, localization error, recovery count, telemetry coverage, and selected
+Nav2/TF/lifecycle warnings. Scores are blank without a baseline and marked
+`not_scored_no_baseline`; an unscored run is not reported as a zero-score result.
+
+Containers may create bind-mounted output as root. Workers normally rename the
+output bundle into its canonical attempt path; if permissions or a filesystem
+boundary prevent that rename, the host copies the readable bundle instead and
+leaves the original under `outputs/` for recovery.
+
 For trusted workers on several hosts, put the campaign output on a shared
 POSIX filesystem. Approve each worker ID once, run one worker per host, then
 reconcile the authoritative results:

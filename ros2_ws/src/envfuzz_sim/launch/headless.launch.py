@@ -165,6 +165,10 @@ def generate_launch_description():
     camera_profile = os.environ.get("ENVFUZZ_CAMERA_PROFILE") == "1"
     keepout_mask = os.environ.get("ENVFUZZ_KEEPOUT_FILTER_MASK")
     backend = os.environ.get("ENVFUZZ_NAVIGATION_BACKEND")
+    gazebo_gui = os.environ.get("ENVFUZZ_GAZEBO_GUI") == "1"
+    gui_config = os.environ.get("ENVFUZZ_GUI_CONFIG") or str(
+        Path(get_package_prefix("gz_sim_vendor")) / "share" / "gz" / "gz-sim8" / "gui" / "gui.config"
+    )
     observation_bridges = []
     if record_contacts:
         observation_bridges.append(Node(
@@ -247,8 +251,14 @@ def generate_launch_description():
         )] if keepout_mask else []),
         ExecuteProcess(
             cmd=["gz", "sim", "-r", "-s", "--headless-rendering", world],
+            name="gazebo_server",
             output="screen",
         ),
+        *([ExecuteProcess(
+            cmd=["gz", "sim", "-g", "--gui-config", gui_config],
+            name="gazebo_gui",
+            output="screen",
+        )] if gazebo_gui else []),
         Node(
             package="robot_state_publisher",
             executable="robot_state_publisher",

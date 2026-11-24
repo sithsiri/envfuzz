@@ -22,6 +22,9 @@ to support final presentations.
   cases without making video mandatory for normal execution.
 - Publish a separate human-use guide covering candidate selection, diagnosis,
   classification, replay verification, and presentation use.
+- Add a local web-hosted review GUI for browsing campaigns, comparing evidence,
+  saving manual classifications, launching replay runs, and requesting video
+  for notable cases.
 
 ## Capabilities
 
@@ -31,6 +34,8 @@ to support final presentations.
   root-cause classification, and campaign-level manual-analysis reporting.
 - `episode-video-evidence`: Optional simulation episode recording that remains
   linked to the exact bundle, runtime, scenario, and replay configuration.
+- `campaign-review-gui`: A loopback-first web interface for filtering campaign
+  candidates and interacting with review evidence and replay operations.
 
 ### Modified Capabilities
 
@@ -43,4 +48,6 @@ None.
 - Extends static campaign reports and CSV/JSON campaign summaries.
 - Adds versioned JSON review records and a human-readable guide under `docs/`.
 - May extend Gazebo launch and worker configuration for optional video capture.
+- May add a small local HTTP/API server and static web assets behind an
+  `envfuzz review` CLI command.
 - Keeps bundle compatibility and normal campaign execution unchanged.

@@ -15,6 +15,28 @@ def test_hash_and_compilation_are_stable():
     assert compile_sdf(scenario) == compile_sdf(scenario)
 
 
+def test_scene_broadcaster_is_only_added_for_graphical_replay():
+    scenario = Scenario(
+        goals=[Pose(x=3, y=3)],
+        objects=[ScenarioObject(
+            id="box", shape="box", pose=Pose(x=2, y=2), size=Size(x=1, y=1, z=1),
+        )],
+    )
+    headless = ET.fromstring(compile_sdf(scenario))
+    graphical = ET.fromstring(compile_sdf(scenario, include_scene_broadcaster=True))
+
+    assert headless.find(".//plugin[@name='gz::sim::systems::SceneBroadcaster']") is None
+    assert graphical.find(".//plugin[@name='gz::sim::systems::SceneBroadcaster']") is not None
+    assert graphical.find(".//light[@name='envfuzz_review_sun']") is not None
+    assert headless.find(".//light[@name='envfuzz_review_sun']") is None
+    assert graphical.find(".//model[@name='floor']/link/visual/material/diffuse") is not None
+    assert headless.find(".//model[@name='floor']/link/visual/material") is None
+    assert graphical.find(".//model[@name='envfuzz_start_marker']") is not None
+    assert graphical.find(".//model[@name='envfuzz_goal_marker_01']") is not None
+    assert headless.find(".//model[@name='envfuzz_start_marker']") is None
+    assert headless.find(".//model[@name='envfuzz_goal_marker_01']") is None
+
+
 def test_invalid_overlap_is_specific():
     scenario = Scenario(objects=[
         ScenarioObject(id="a", shape="cylinder", pose=Pose(x=2, y=2), radius=1),

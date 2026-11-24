@@ -18,6 +18,78 @@ def test_video_capture_reports_unavailable_in_headless_host(tmp_path, monkeypatc
     assert not (tmp_path / "episode" / "episode.mp4").exists()
 
 
+def test_graphical_client_failure_marks_video_failed_without_changing_result(tmp_path):
+    bundle = tmp_path / "episode"
+    bundle.mkdir()
+    (bundle / "result.json").write_text('{"status":"completed"}')
+    (bundle / "logs.txt").write_text(
+        "[ERROR] [gazebo_gui]: process has died [pid 42, exit code -11, "
+        "cmd 'gz sim -g --gui-config /tmp/gui.config']\n"
+    )
+    temporary = tmp_path / "capture.mkv"
+    temporary.write_bytes(b"capture")
+
+    class Process:
+        returncode = 0
+
+        def send_signal(self, _signal):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    metadata = finish_video_capture(bundle, {
+        "metadata": {"schema_version": "1", "status": "recording", "video": None,
+                     "replay_origin": "original", "reason": None},
+        "process": Process(),
+        "temporary": temporary,
+        "graphical": True,
+    })
+
+    assert metadata["status"] == "failed"
+    assert "graphical client" in metadata["reason"]
+    assert json.loads((bundle / "result.json").read_text())["status"] == "completed"
+    assert not (bundle / "episode.mp4").exists()
+
+
+def test_headless_server_killed_during_shutdown_does_not_discard_video(tmp_path, monkeypatch):
+    bundle = tmp_path / "episode"
+    bundle.mkdir()
+    (bundle / "logs.txt").write_text(
+        "[WARNING] [launch]: user interrupted with ctrl-c (SIGINT)\n"
+        "[ERROR] [gz-4]: process has died [pid 42, exit code -9, "
+        "cmd 'gz sim -r -s --headless-rendering world.sdf']\n"
+    )
+    temporary = tmp_path / "capture.mkv"
+    temporary.write_bytes(b"capture")
+
+    class Process:
+        returncode = 0
+
+        def send_signal(self, _signal):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    def encode(command, **_kwargs):
+        from pathlib import Path
+        Path(command[-1]).write_bytes(b"encoded")
+
+    monkeypatch.setattr("envfuzz.episode_video.subprocess.run", encode)
+    metadata = finish_video_capture(bundle, {
+        "metadata": {"schema_version": "1", "status": "recording", "video": None,
+                     "replay_origin": "original", "reason": None},
+        "process": Process(),
+        "temporary": temporary,
+        "graphical": True,
+    })
+
+    assert metadata["status"] == "available"
+    assert metadata["video"] == "episode.mp4"
+    assert (bundle / "episode.mp4").read_bytes() == b"encoded"
+
+
 def test_presentation_archive_copies_marked_bundles(tmp_path):
     root = tmp_path / "campaign"
     root.mkdir()

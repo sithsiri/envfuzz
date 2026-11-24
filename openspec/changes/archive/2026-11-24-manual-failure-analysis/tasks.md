@@ -39,8 +39,33 @@
 
 - [x] 4.1 Add end-to-end simulator-free coverage for queue export, report
   generation, review updates, replay evidence, and presentation archive output.
-- [ ] 4.2 Run existing unit and CLI suites plus the focused new suite; verify
+- [x] 4.2 Run existing unit and CLI suites plus the focused new suite; verify
   existing campaign, replay, bundle, and report behavior remains compatible.
 - [x] 4.3 Validate the OpenSpec change with `openspec validate
   manual-failure-analysis --strict`; verify all planning artifacts are complete
   and the change is ready for implementation.
+
+## 5. Add the local campaign review GUI
+
+- [x] 5.1 Add an `envfuzz review CAMPAIGN --serve` command with safe loopback
+  defaults, browser launch behavior, and explicit host/port options.
+- [x] 5.2 Build a candidate queue using existing campaign, candidate export,
+  review, and replay evidence; add layout, strategy, outcome, status, category,
+  confidence, and reproducibility filters.
+- [x] 5.3 Add a candidate-detail page that presents bundle diagnostics,
+  trajectory and occupancy evidence, telemetry, logs, scenario geometry,
+  original/replay attempts, and the manual-review form.
+- [x] 5.4 Add bounded asynchronous replay jobs with queue/running/result states,
+  repeat support, replay-origin metadata, cancellation, and Docker/backend
+  configuration.
+- [x] 5.5 Add on-demand replay-video controls and display cached/generated video
+  in the candidate detail page; keep capture failure separate from navigation
+  status.
+- [x] 5.6 Restrict server file access and replay output to the selected campaign
+  and configured review directories; verify loopback-only and remote-binding
+  behavior.
+- [x] 5.7 Add simulator-free GUI/API unit and CLI workflow tests, including
+  candidate filtering, review updates, replay job state transitions, and
+  presentation-state updates.
+- [x] 5.8 Add user documentation for starting the reviewer and for replay/video
+  behavior in Docker and graphical host environments.

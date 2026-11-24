@@ -4,13 +4,27 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
 from pathlib import Path
 
 
-def start_video_capture(output: Path, replay_origin: str | None = None) -> dict:
+def _graphical_client_failed(log_text: str) -> bool:
+    failure = re.search(
+        r"\[ERROR\] \[(?:gazebo_gui|gz-\d+)\]: process has died .*cmd 'gz sim -g(?:\s|')",
+        log_text,
+    )
+    if failure is None:
+        return False
+    shutdown = re.search(r"\[WARNING\] \[launch\]: user interrupted with ctrl-c", log_text)
+    return shutdown is None or failure.start() < shutdown.start()
+
+
+def start_video_capture(
+    output: Path, replay_origin: str | None = None, graphical: bool = False,
+) -> dict:
     output.parent.mkdir(parents=True, exist_ok=True)
     display = os.environ.get("DISPLAY")
     ffmpeg = shutil.which("ffmpeg")
@@ -24,10 +38,10 @@ def start_video_capture(output: Path, replay_origin: str | None = None) -> dict:
     }
     if not display:
         metadata["reason"] = "No DISPLAY is available for episode recording."
-        return {"metadata": metadata, "process": None, "temporary": temporary}
+        return {"metadata": metadata, "process": None, "temporary": temporary, "graphical": graphical}
     if not ffmpeg:
         metadata["reason"] = "ffmpeg is unavailable."
-        return {"metadata": metadata, "process": None, "temporary": temporary}
+        return {"metadata": metadata, "process": None, "temporary": temporary, "graphical": graphical}
     try:
         process = subprocess.Popen([
             ffmpeg,
@@ -41,9 +55,9 @@ def start_video_capture(output: Path, replay_origin: str | None = None) -> dict:
         ])
     except OSError as error:
         metadata["reason"] = str(error)
-        return {"metadata": metadata, "process": None, "temporary": temporary}
+        return {"metadata": metadata, "process": None, "temporary": temporary, "graphical": graphical}
     metadata["status"] = "recording"
-    return {"metadata": metadata, "process": process, "temporary": temporary}
+    return {"metadata": metadata, "process": process, "temporary": temporary, "graphical": graphical}
 
 
 def finish_video_capture(bundle: Path, capture: dict) -> dict:
@@ -59,6 +73,15 @@ def finish_video_capture(bundle: Path, capture: dict) -> dict:
             process.wait(timeout=10)
         if temporary.is_file():
             video = bundle / "episode.mp4"
+            logs = bundle / "logs.txt"
+            log_text = logs.read_text(encoding="utf-8", errors="replace") if logs.is_file() else ""
+            if capture.get("graphical") and _graphical_client_failed(log_text):
+                temporary.unlink(missing_ok=True)
+                metadata["status"] = "failed"
+                metadata["reason"] = "Gazebo's graphical client exited during replay."
+                bundle.mkdir(parents=True, exist_ok=True)
+                (bundle / "video.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+                return metadata
             try:
                 subprocess.run([
                     shutil.which("ffmpeg") or "ffmpeg",

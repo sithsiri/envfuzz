@@ -243,7 +243,7 @@ def _fake_ros_modules(monkeypatch, share: Path) -> None:
     module("launch.launch_description_sources", PythonLaunchDescriptionSource=_Action)
     module("launch.substitutions", LaunchConfiguration=_Action)
     module("launch_ros")
-    module("launch_ros.actions", Node=_Node)
+    module("launch_ros.actions", LifecycleNode=_Node, Node=_Node)
 
 
 @pytest.fixture

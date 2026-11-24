@@ -348,7 +348,11 @@ def _inside(x: float, y: float, polygon: list[tuple[float, float]]) -> bool:
     return inside
 
 
-def compile_sdf(scenario: Scenario, profile: SimulationProfile | None = None) -> str:
+def compile_sdf(
+    scenario: Scenario,
+    profile: SimulationProfile | None = None,
+    include_scene_broadcaster: bool = False,
+) -> str:
     violations = validate_scenario(scenario)
     if violations:
         raise ValueError("; ".join(violations))
@@ -373,6 +377,17 @@ def compile_sdf(scenario: Scenario, profile: SimulationProfile | None = None) ->
         )
         if system == "sensors":
             ET.SubElement(plugin, "render_engine").text = "ogre2"
+    if include_scene_broadcaster:
+        ET.SubElement(
+            world, "plugin", filename="gz-sim-scene-broadcaster-system",
+            name="gz::sim::systems::SceneBroadcaster",
+        )
+        light = ET.SubElement(world, "light", name="envfuzz_review_sun", type="directional")
+        ET.SubElement(light, "cast_shadows").text = "true"
+        ET.SubElement(light, "pose").text = "0 0 10 0 0 0"
+        ET.SubElement(light, "diffuse").text = "0.75 0.75 0.75 1"
+        ET.SubElement(light, "specular").text = "0 0 0 1"
+        ET.SubElement(light, "direction").text = "0.2 -0.3 -0.9"
 
     if profile is not None and profile.record_contacts:
         ET.SubElement(
@@ -388,11 +403,12 @@ def compile_sdf(scenario: Scenario, profile: SimulationProfile | None = None) ->
     margin = thickness / 2
     floor_bounds = (min_x - thickness, max_x + thickness, min_y - thickness, max_y + thickness)
     if scenario.floor_drops or scenario.floor_patches:
-        _add_floor(world, scenario, floor_bounds, thickness)
+        _add_floor(world, scenario, floor_bounds, thickness, include_scene_broadcaster)
     else:
         _add_static_model(
             world, "floor", (center_x, center_y, -margin, 0, 0, 0), "box",
             {"size": _numbers((width + 2 * thickness, depth + 2 * thickness, thickness))},
+            review_visual=include_scene_broadcaster,
         )
     room_boxes = (
         ("wall_west", (min_x - margin, center_y, wall_height / 2), (thickness, depth, wall_height)),
@@ -401,7 +417,10 @@ def compile_sdf(scenario: Scenario, profile: SimulationProfile | None = None) ->
         ("wall_north", (center_x, max_y + margin, wall_height / 2), (width + 2 * thickness, thickness, wall_height)),
     )
     for name, position, size in room_boxes:
-        _add_static_model(world, name, (*position, 0, 0, 0), "box", {"size": _numbers(size)})
+        _add_static_model(
+            world, name, (*position, 0, 0, 0), "box", {"size": _numbers(size)},
+            review_visual=include_scene_broadcaster,
+        )
 
     for obj in sorted(scenario.objects, key=lambda item: item.id):
         if obj.shape == "box":
@@ -415,7 +434,11 @@ def compile_sdf(scenario: Scenario, profile: SimulationProfile | None = None) ->
         pose = (obj.pose.x, obj.pose.y, height / 2, 0, 0, obj.pose.yaw)
         _add_static_model(
             world, f"obstacle_{obj.id}", pose, obj.shape, dimensions, material=obj.material,
+            review_visual=include_scene_broadcaster,
         )
+
+    if include_scene_broadcaster:
+        _add_review_markers(world, scenario)
 
     moves = timeline_moves(scenario)
     if moves:
@@ -434,7 +457,10 @@ def compile_sdf(scenario: Scenario, profile: SimulationProfile | None = None) ->
     return '<?xml version="1.0" ?>\n' + ET.tostring(sdf, encoding="unicode") + "\n"
 
 
-def _add_floor(world: ET.Element, scenario: Scenario, bounds: tuple[float, ...], thickness: float) -> None:
+def _add_floor(
+    world: ET.Element, scenario: Scenario, bounds: tuple[float, ...], thickness: float,
+    review_visual: bool = False,
+) -> None:
     regions = [*(scenario.floor_drops or []), *(scenario.floor_patches or [])]
     xs = sorted({bounds[0], bounds[1], *(edge for region in regions for edge in (region.min_x, region.max_x))})
     ys = sorted({bounds[2], bounds[3], *(edge for region in regions for edge in (region.min_y, region.max_y))})
@@ -449,6 +475,7 @@ def _add_floor(world: ET.Element, scenario: Scenario, bounds: tuple[float, ...],
                 (center_x, center_y, -thickness / 2 - depth, 0, 0, 0), "box",
                 {"size": _numbers((right - left, top - bottom, thickness))},
                 friction=friction,
+                review_visual=review_visual,
             )
 
 
@@ -456,10 +483,40 @@ def _numbers(values: tuple[float, ...]) -> str:
     return " ".join(str(value) for value in values)
 
 
+def _add_review_markers(world: ET.Element, scenario: Scenario) -> None:
+    def marker(name: str, pose: tuple[float, float, float], color: str, goal: bool) -> None:
+        model = ET.SubElement(world, "model", name=name)
+        ET.SubElement(model, "static").text = "true"
+        ET.SubElement(model, "pose").text = _numbers((*pose, 0, 0, 0))
+        link = ET.SubElement(model, "link", name="marker")
+
+        def visual(name: str, z: float, geometry: str, dimensions: dict[str, str]) -> None:
+            element = ET.SubElement(link, "visual", name=name)
+            ET.SubElement(element, "pose").text = f"0 0 {z} 0 0 0"
+            shape = ET.SubElement(ET.SubElement(element, "geometry"), geometry)
+            for dimension, value in dimensions.items():
+                ET.SubElement(shape, dimension).text = value
+            material = ET.SubElement(element, "material")
+            ET.SubElement(material, "ambient").text = color
+            ET.SubElement(material, "diffuse").text = color
+            ET.SubElement(material, "emissive").text = color
+
+        visual("base", 0.012, "cylinder", {"radius": "0.32", "length": "0.02"})
+        visual("beacon", 0.25, "cylinder", {"radius": "0.035", "length": "0.48"})
+        if goal:
+            visual("goal_cap", 0.56, "cone", {"radius": "0.13", "length": "0.18"})
+        else:
+            visual("start_cap", 0.55, "sphere", {"radius": "0.12"})
+
+    marker("envfuzz_start_marker", (scenario.start.x, scenario.start.y, 0), "0.08 0.38 1 1", False)
+    for index, goal in enumerate(scenario.goals, 1):
+        marker(f"envfuzz_goal_marker_{index:02d}", (goal.x, goal.y, 0), "0.12 0.92 0.24 1", True)
+
+
 def _add_static_model(
     world: ET.Element, name: str, pose: tuple[float, ...],
     shape: str, dimensions: dict[str, str], *, friction: float | None = None,
-    material: Material | None = None,
+    material: Material | None = None, review_visual: bool = False,
 ) -> None:
     model = ET.SubElement(world, "model", name=name)
     ET.SubElement(model, "static").text = "true"
@@ -468,11 +525,23 @@ def _add_static_model(
     # Rendering-based LiDAR sees visuals while physics uses collision geometry.
     for kind in ("collision", "visual"):
         element = ET.SubElement(link, kind, name=kind)
+        if kind == "visual" and review_visual:
+            colors = {
+                "opaque": "0.68 0.68 0.68 1",
+                "transparent": "0.25 0.55 0.85 0.45",
+                "reflective": "0.85 0.68 0.18 1",
+                "dark": "0.25 0.27 0.30 1",
+            }
+            rgba = colors.get(material, "0.48 0.50 0.52 1" if name.startswith("floor") else "0.68 0.68 0.68 1")
+            render_material = ET.SubElement(element, "material")
+            ET.SubElement(render_material, "ambient").text = rgba
+            ET.SubElement(render_material, "diffuse").text = rgba
+            ET.SubElement(render_material, "specular").text = "0.05 0.05 0.05 1"
         if kind == "visual" and material is not None:
             surface = SURFACES[material]
             ET.SubElement(element, "laser_retro").text = str(surface.intensity)
             if surface.transmits:
-                ET.SubElement(element, "transparency").text = "0.95"
+                ET.SubElement(element, "transparency").text = "0.45" if review_visual else "0.95"
         if kind == "collision" and friction is not None:
             surface = ET.SubElement(element, "surface")
             ode = ET.SubElement(ET.SubElement(surface, "friction"), "ode")

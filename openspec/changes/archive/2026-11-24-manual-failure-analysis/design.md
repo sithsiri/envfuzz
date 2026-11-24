@@ -18,6 +18,8 @@ system.
 - Separate human classification data from episode result data.
 - Support optional video capture for live episodes and replay cases.
 - Provide a static HTML/CSV workflow that works without a database service.
+- Provide a local web-hosted review workflow that extends the static report
+  with filtering, manual edits, replay status, and on-demand video generation.
 
 **Non-Goals:**
 
@@ -68,6 +70,15 @@ system.
    and replay reproducibility. Bundle and diagnostic links will use existing
    relative paths rather than copying data.
 
+   An interactive `envfuzz review` command will provide the preferred reviewer
+   experience by serving a local loopback web application. Static campaign
+   report generation remains valid and usable without a server.
+
+   The GUI will use the existing candidate export, campaign SQLite index,
+   bundle-relative artifacts, manual-review JSON, and replay CLI operations.
+   It will not maintain a separate review database or duplicate authoritative
+   attempt state.
+
 5. **Make video capture a separate optional artifact.**
 
    Capture configuration will be passed only to episodes where recording is
@@ -86,6 +97,25 @@ system.
    replay execution remains an existing campaign or CLI operation. Only cases
    marked presentation candidates will be included in a presentation archive.
 
+7. **Keep replay and video work asynchronous and bounded.**
+
+   The GUI will submit replay requests to a server-side job runner and poll for
+   status. Jobs will run with an existing replay or Docker execution backend,
+   preserve an explicit replay origin, and write their own bundle under the
+   campaign review area. Repeated replay requests will remain separate,
+   inspectable operations rather than overwriting prior evidence.
+
+   Video capture is opt-in per replay or later generated artifact. A capture
+   failure is visible in job and bundle metadata and does not change the
+   navigation result.
+
+8. **Bind the local server safely by default.**
+
+   The server will listen on loopback (`127.0.0.1`) by default and open a
+   browser on the operator's machine. Non-loopback binding and remote origin
+   policies require explicit CLI configuration. Replay and file access remain
+   constrained to the selected campaign and its review output directories.
+
 ## Risks / Trade-offs
 
 - Recording video can consume disk, CPU, or wall time → Capture is opt-in and
@@ -98,6 +128,11 @@ system.
   and replay signatures independently and require manual confirmation.
 - Large campaigns can create large HTML reports → Export CSV/JSON and paginate
   or filter static report rows.
+- Replay/video jobs consume compute and disk → Use explicit submissions,
+  bounded concurrency, visible status, and a persistent review output directory.
+- A web server can expose unintended files or mutate evidence → Bind to loopback
+  by default, restrict paths, and keep manual review state separate from
+  authoritative bundles.
 
 ## Migration Plan
 

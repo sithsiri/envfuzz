@@ -7,11 +7,19 @@
   `--smoke` for a local bundle check, `--params-file` to supply a Nav2 YAML, or
   `--baseline FILE` to score the mission.
 - `envfuzz replay BUNDLE --output DIR` repeats a live mission using its saved
-  scenario, limits, and Nav2 parameters.
+  scenario, limits, and Nav2 parameters. Add `--video` to record Gazebo's GUI
+  view in an isolated virtual display; this requires the optional
+  `envfuzz:jazzy-video` image and can be overridden with
+  `--video-docker-image IMAGE`.
 - `envfuzz review-export CAMPAIGN` exports timeout and mission-failure candidates
   as `review-candidates.json` and `review-candidates.csv`.
 - `envfuzz review-update CAMPAIGN` creates or updates a structured manual
   root-cause record.
+- `envfuzz review CAMPAIGN --serve` starts a loopback-first web GUI for filtering
+  failure candidates, inspecting bundles, saving classifications, and starting
+  replay jobs. Use `--no-open`, `--host`, `--port`, `--replay-backend docker`,
+  `--docker-image IMAGE`, or `--video-docker-image IMAGE` to control the local
+  server and replay backends.
 - `envfuzz report CAMPAIGN --outcome timeout --review-status confirmed`
   filters campaign review evidence.
 - `envfuzz report BUNDLE` writes a standalone trajectory SVG in the bundle.

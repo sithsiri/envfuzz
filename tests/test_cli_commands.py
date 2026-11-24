@@ -267,7 +267,7 @@ def test_simulated_run_prints_score_when_baseline_was_applied(tmp_path, monkeypa
 
     assert result.exit_code == 0
     assert result.output == f"completed: {output}\nscore=6 tiers=T2,T3\n"
-    assert calls == [(output, 15.0, 45.0, (None, None, None, None))]
+    assert calls == [(output, 15.0, 45.0, (None, None, None, None, False, False, None))]
 
 
 def test_failed_run_prints_reason_and_exits_nonzero(tmp_path, monkeypatch):
@@ -333,7 +333,8 @@ def test_replay_reuses_stored_settings_from_the_bundle(tmp_path, monkeypatch):
     result = _invoke("replay", bundle, "--output", output)
 
     assert result.exit_code == 0
-    assert calls == [(output, 12.0, 34.0, (None, None, bundle / "oracle.yaml", bundle / "profile.yaml"))]
+    assert calls == [(output, 12.0, 34.0,
+                      (None, None, bundle / "oracle.yaml", bundle / "profile.yaml", False, False, None))]
 
 
 def test_replay_profile_option_overrides_stored_profile(tmp_path, monkeypatch):
@@ -347,7 +348,27 @@ def test_replay_profile_option_overrides_stored_profile(tmp_path, monkeypatch):
     result = _invoke("replay", bundle, "--output", tmp_path / "replay", "--profile", override)
 
     assert result.exit_code == 0
-    assert calls[0][-1] == override
+    assert calls[0][-4] == override
+
+
+def test_replay_video_uses_isolated_video_image_without_host_display(tmp_path, monkeypatch):
+    bundle = _gazebo_bundle(tmp_path / "original")
+    commands = []
+
+    monkeypatch.setattr(cli.shutil, "which", lambda executable: "/usr/bin/docker")
+    monkeypatch.setattr(cli.subprocess, "run", lambda command, **options: (
+        commands.append((command, options))
+        or cli.subprocess.CompletedProcess(command, 0, "completed replay\n", "")
+    ))
+
+    result = _invoke("replay", bundle, "--output", tmp_path / "replay", "--video")
+
+    assert result.exit_code == 0
+    command, options = commands[0]
+    assert "envfuzz:jazzy-video" in command
+    assert "--video" in command
+    assert "--replay-origin" in command
+    assert options["timeout"] == 79
 
 
 # report / show
@@ -419,3 +440,94 @@ def test_show_rejects_bundle_without_telemetry(tmp_path):
     assert result.exit_code == 2
     assert "no recorded telemetry" in _plain(result)
     assert not (bundle / "diagnostics.html").exists()
+
+
+def test_review_command_rejects_missing_serve(tmp_path):
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+
+    result = _invoke("review", campaign)
+
+    assert result.exit_code == 2
+    assert "--serve" in _plain(result)
+
+
+def test_review_command_defaults_to_docker_replay(tmp_path, monkeypatch):
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    calls = []
+    monkeypatch.setattr(
+        cli,
+        "serve_review",
+        lambda root, **options: calls.append((root, options)),
+    )
+
+    result = _invoke("review", campaign, "--serve", "--no-open")
+
+    assert result.exit_code == 0
+    assert calls[0][1]["backend"] == "docker"
+    assert calls[0][1]["video_image"] == "envfuzz:jazzy-video"
+
+
+def test_review_command_forwards_loopback_server_options(tmp_path, monkeypatch):
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    calls = []
+    monkeypatch.setattr(
+        cli,
+        "serve_review",
+        lambda root, **options: calls.append((root, options)),
+    )
+
+    result = _invoke(
+        "review", campaign, "--serve", "--host", "127.0.0.1",
+        "--port", "9001", "--no-open", "--replay-backend", "docker",
+        "--docker-image", "example/envfuzz:test",
+    )
+
+    assert result.exit_code == 0
+    assert calls == [(campaign, {
+        "host": "127.0.0.1",
+        "port": 9001,
+        "open_browser": False,
+        "backend": "docker",
+        "image": "example/envfuzz:test",
+        "video_image": "envfuzz:jazzy-video",
+    })]
+
+
+def test_review_command_rejects_missing_serve(tmp_path):
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+
+    result = _invoke("review", campaign)
+
+    assert result.exit_code == 2
+    assert "--serve" in _plain(result)
+
+
+def test_review_command_forwards_loopback_server_options(tmp_path, monkeypatch):
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    calls = []
+    monkeypatch.setattr(
+        cli,
+        "serve_review",
+        lambda root, **options: calls.append((root, options)),
+    )
+
+    result = _invoke(
+        "review", campaign, "--serve", "--host", "127.0.0.1",
+        "--port", "9001", "--no-open", "--replay-backend", "docker",
+        "--docker-image", "example/envfuzz:test",
+    )
+
+    assert result.exit_code == 0
+    assert calls == [(campaign, {
+        "host": "127.0.0.1",
+        "port": 9001,
+        "open_browser": False,
+        "backend": "docker",
+        "image": "example/envfuzz:test",
+        "video_image": "envfuzz:jazzy-video",
+    })]

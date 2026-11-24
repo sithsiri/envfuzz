@@ -9,9 +9,29 @@ import pytest
 from typer.testing import CliRunner
 
 from envfuzz.cli import app
-from envfuzz.gazebo import run_gazebo
+from envfuzz.gazebo import _prepare_review_gui_config, run_gazebo
 from envfuzz.report import render_report
 from envfuzz.scenario import Scenario, load_scenario
+
+
+def test_review_gui_camera_frames_the_scenario_bounds(tmp_path):
+    scenario = Scenario(world={"min_x": -8, "max_x": 12, "min_y": 2, "max_y": 6})
+    source = tmp_path / "default.config"
+    source.write_text(
+        '<?xml version="1.0"?>\n<plugin name="3D View">'
+        "<camera_pose>-4 0 4 0 0.5 0</camera_pose></plugin>",
+        encoding="utf-8",
+    )
+    output = tmp_path / "bundle"
+    output.mkdir()
+    environment = {"ENVFUZZ_GUI_CONFIG": str(source)}
+
+    generated = _prepare_review_gui_config(scenario, output, environment)
+
+    assert generated == output / "gui.config"
+    parsed = ET.fromstring(f"<root>{generated.read_text().split('?>', 1)[1]}</root>")
+    assert parsed.findtext("./plugin[@name='3D View']/camera_pose") == "2.0 4.0 23.0 0 1.35 0"
+    assert environment["ENVFUZZ_GUI_CONFIG"] == str(generated)
 
 
 def test_missing_ros_writes_a_failure_bundle(tmp_path, monkeypatch):

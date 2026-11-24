@@ -112,6 +112,66 @@ envfuzz report runs/campaign \
 
 The report links result bundles, diagnostics, logs, and recorded review state.
 
+For a browser-based workflow, start the local reviewer:
+
+```sh
+envfuzz review runs/campaign --serve
+```
+
+The reviewer defaults to `127.0.0.1:8765`, opens a browser, presents the
+behavior-failure queue, and lets you inspect evidence and update manual-review
+state. Use `--no-open` for a terminal-only workflow.
+
+Replay jobs are available from candidate detail pages:
+
+```sh
+envfuzz review runs/campaign --serve --replay-backend local
+envfuzz review runs/campaign --serve --replay-backend docker
+```
+
+For local replay, source the ROS workspace built at the repository root:
+
+```sh
+source /opt/ros/jazzy/setup.bash
+source /home/sithindu/Documents/envfuzz/install/local_setup.bash
+envfuzz review runs/campaign --serve --replay-backend local
+```
+
+If the reviewer is already running, stop it and restart it after changing
+the sourced environment. A hard browser refresh may also be needed to load a
+newly updated reviewer page.
+
+The Docker backend requires `envfuzz:jazzy` or another replay image supplied
+through `--docker-image`. Build the separate graphical replay image after
+building the base image:
+
+```sh
+docker build -t envfuzz:jazzy .
+docker build -f docker/Dockerfile.video -t envfuzz:jazzy-video .
+```
+
+Request a recorded Gazebo view from the reviewer with:
+
+```sh
+envfuzz review runs/campaign --serve --replay-backend docker \
+  --docker-image envfuzz:jazzy \
+  --video-docker-image envfuzz:jazzy-video
+```
+
+The video image starts an isolated Xvfb display only for a video replay. It
+does not use the host's `DISPLAY` or X11 socket. The same path is available
+from the CLI with `envfuzz replay <bundle> --video`; that command launches the
+video image and writes its replay bundle to the requested output directory.
+The video image uses Mesa llvmpipe software rendering at 1280x720, so it can
+use several CPU cores and run slower than headless replay. Keep the run's
+watchdog limit sized for this extra rendering work; the recorder and isolated
+display are stopped when the replay finishes, is cancelled, or reaches that
+limit. A GUI startup failure is recorded in `video.json` without replacing the
+replay result. The overview camera frames the scenario bounds. Graphical replay
+marks the start in blue and each goal in green; these markers are visual only
+and do not affect navigation. Capture begins when the Gazebo GUI window appears,
+so short navigation failures still include the rendered scene.
+
 ## 6. Presentation archive
 
 Mark only clearly explained, replayed cases as presentation candidates. Keep the

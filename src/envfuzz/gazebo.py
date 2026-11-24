@@ -12,7 +12,9 @@ import shutil
 import subprocess
 import sys
 import time
+from typing import Callable
 from uuid import uuid4
+from xml.etree import ElementTree as ET
 
 from .maps import export_keepout_filter_map, export_navigation_map, save_map_comparison
 from .oracle import load_baseline, restricted_events
@@ -37,10 +39,34 @@ def require_camera_capability() -> None:
         raise OSError("The RTAB-Map camera profile could not detect an exposed NVIDIA GPU")
 
 
+def _prepare_review_gui_config(scenario: Scenario, output: Path, environment: dict[str, str]) -> Path | None:
+    source = environment.get("ENVFUZZ_GUI_CONFIG")
+    if not source or not Path(source).is_file():
+        return None
+    contents = Path(source).read_text(encoding="utf-8")
+    if contents.lstrip().startswith("<?xml"):
+        contents = contents[contents.index("?>") + 2:]
+    root = ET.fromstring(f"<envfuzz_gui_config>{contents}</envfuzz_gui_config>")
+    camera_pose = root.find("./plugin[@name='3D View']/camera_pose")
+    if camera_pose is None:
+        return None
+    world = scenario.world
+    center_x = (world["min_x"] + world["max_x"]) / 2
+    center_y = (world["min_y"] + world["max_y"]) / 2
+    span = max(world["max_x"] - world["min_x"], world["max_y"] - world["min_y"])
+    camera_pose.text = f"{center_x} {center_y} {span * 1.15} 0 1.35 0"
+    target = output / "gui.config"
+    body = "\n".join(ET.tostring(child, encoding="unicode") for child in root)
+    target.write_text(f"<?xml version=\"1.0\"?>\n{body}\n", encoding="utf-8")
+    environment["ENVFUZZ_GUI_CONFIG"] = str(target)
+    return target
+
+
 def run_gazebo(
     scenario: Scenario, output: Path, timeout: float, watchdog: float,
     params_file: Path | None = None, baseline_file: Path | None = None, oracle_file: Path | None = None,
-    profile_file: Path | None = None, keepout_filter: bool = False,
+    profile_file: Path | None = None, keepout_filter: bool = False, graphical: bool = False,
+    on_graphical_ready: Callable[[bool], None] | None = None,
 ) -> EpisodeResult:
     if not scenario.goals:
         raise ValueError("A Gazebo mission requires at least one goal")
@@ -49,7 +75,7 @@ def run_gazebo(
         require_camera_capability()
     if keepout_filter and not scenario.restricted_zones:
         raise ValueError("Keepout Filter requires at least one restricted zone")
-    world = compile_sdf(scenario, profile)
+    world = compile_sdf(scenario, profile, include_scene_broadcaster=graphical)
     baseline = load_baseline(baseline_file) if baseline_file is not None else None
     oracle = load_oracle(oracle_file)
     if baseline is not None and (
@@ -119,6 +145,8 @@ def run_gazebo(
         for flag in observation_flags:
             if getattr(profile, flag):
                 environment[f"ENVFUZZ_{flag.upper()}"] = "1"
+    if graphical:
+        _prepare_review_gui_config(scenario, output, environment)
     process = None
     started = time.monotonic()
     worker_result = output / "mission.json"
@@ -130,6 +158,31 @@ def run_gazebo(
                 [sys.executable, "-m", "envfuzz.mission", str(output), str(timeout)],
                 env=environment, stdout=logs, stderr=subprocess.STDOUT, start_new_session=True,
             )
+            if on_graphical_ready is not None:
+                ready_deadline = time.monotonic() + min(30.0, watchdog)
+                graphical_ready = False
+                xwininfo = shutil.which("xwininfo")
+                while time.monotonic() < ready_deadline:
+                    if process.poll() is not None:
+                        break
+                    if xwininfo is not None:
+                        try:
+                            windows = subprocess.run(
+                                [xwininfo, "-root", "-tree"], env=environment, capture_output=True,
+                                text=True, timeout=2, check=False,
+                            )
+                        except (OSError, subprocess.TimeoutExpired):
+                            time.sleep(0.25)
+                            continue
+                        if windows.returncode == 0 and "Gazebo Sim" in windows.stdout:
+                            on_graphical_ready(True)
+                            graphical_ready = True
+                            break
+                    else:
+                        break
+                    time.sleep(0.25)
+                if not graphical_ready:
+                    on_graphical_ready(False)
             process.wait(timeout=watchdog)
         if worker_result.exists() and process.returncode == 0:
             result = EpisodeResult.model_validate_json(worker_result.read_text(encoding="utf-8"))

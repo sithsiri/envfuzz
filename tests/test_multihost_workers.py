@@ -768,7 +768,10 @@ def test_reconcile_with_a_broken_index_fails_cleanly_and_writes_nothing(campaign
         result = runner.invoke(app, command)
         assert result.exit_code == 2, command
         assert isinstance(result.exception, SystemExit)
-        assert "results.sqlite3" in " ".join(result.output.split())
+        output_text = " ".join(result.output.split())
+        assert "Campaign index" in output_text
+        assert "unavailable" in output_text
+        assert "file is not a database" in output_text
     assert not (output / "results.csv").exists()
     assert not (output / "claims.json").exists()
 

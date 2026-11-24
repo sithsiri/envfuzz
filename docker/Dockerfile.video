@@ -1,0 +1,23 @@
+ARG ENVFUZZ_BASE_IMAGE=envfuzz:jazzy
+FROM ${ENVFUZZ_BASE_IMAGE}
+
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg xvfb xauth x11-utils libglx-mesa0 libgl1-mesa-dri \
+    && mkdir -p /opt/envfuzz-video \
+    && cp /opt/ros/jazzy/opt/gz_sim_vendor/share/gz/gz-sim8/gui/gui.config /opt/envfuzz-video/gui.config \
+    && sed -i -e 's/<width>1000<\//<width>1280<\//' -e 's/<height>845<\//<height>720<\//' \
+        -e 's/show_again="true"/show_again="false"/' \
+        -e 's/<ambient_light>0.4 0.4 0.4<\//<ambient_light>0.65 0.65 0.65<\//' \
+        -e 's|<camera_pose>-6 0 6 0 0.5 0</camera_pose>|<camera_pose>-4 0 4 0 0.5 0</camera_pose>|' \
+        /opt/envfuzz-video/gui.config \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV LIBGL_ALWAYS_SOFTWARE=1 \
+    GALLIUM_DRIVER=llvmpipe \
+    ENVFUZZ_GUI_CONFIG=/opt/envfuzz-video/gui.config \
+    QT_X11_NO_MITSHM=1
+
+COPY docker/video-entrypoint.sh /usr/local/bin/envfuzz-video-entrypoint
+RUN chmod 0755 /usr/local/bin/envfuzz-video-entrypoint
+ENTRYPOINT ["/usr/local/bin/envfuzz-video-entrypoint"]

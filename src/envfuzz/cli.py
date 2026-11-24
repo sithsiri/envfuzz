@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sqlite3
 from pathlib import Path
+import subprocess
+import uuid
 import tempfile
 from typing import List, Optional
 
@@ -39,6 +43,7 @@ from .episode_video import (
     finish_video_capture,
     start_video_capture,
 )
+from .review_gui import serve_review
 from .runner import EpisodeRunner
 from .workers import WorkerLimits
 
@@ -149,9 +154,26 @@ def run_command(
     keepout_filter: bool = typer.Option(False, "--keepout-filter", help="Enable Nav2's Keepout Filter for restricted zones."),
     video: bool = typer.Option(False, "--video", help="Record an optional episode video when display capture is available."),
     replay_origin: Optional[str] = typer.Option(None, hidden=True),
+    graphical_replay: bool = typer.Option(False, hidden=True),
 ) -> None:
     scenario = load_scenario(path)
-    capture = start_video_capture(output, replay_origin) if video else None
+    capture = start_video_capture(output, replay_origin) if video and not graphical_replay else None
+
+    def on_graphical_ready(ready: bool) -> None:
+        nonlocal capture
+        if ready:
+            capture = start_video_capture(output, replay_origin, graphical=True)
+        else:
+            capture = {
+                "metadata": {
+                    "schema_version": "1", "status": "failed", "video": None,
+                    "replay_origin": replay_origin,
+                    "reason": "Gazebo's GUI window did not become ready for capture.",
+                },
+                "process": None,
+                "temporary": output.with_name(output.name + ".capture.tmp.mkv"),
+                "graphical": True,
+            }
     try:
         if smoke:
             if keepout_filter or any(path is not None for path in (params_file, baseline_file, oracle_file, profile_file)):
@@ -161,7 +183,10 @@ def run_command(
             )
         else:
             result = run_gazebo(scenario, output, timeout, watchdog, params_file, baseline_file,
-                                oracle_file, profile_file, keepout_filter)
+                                oracle_file, profile_file, keepout_filter, graphical_replay,
+                                on_graphical_ready if graphical_replay and video else None)
+        if video and graphical_replay and capture is None:
+            on_graphical_ready(False)
         if capture is not None:
             finish_video_capture(output, capture)
     except FileExistsError as error:
@@ -176,12 +201,52 @@ def replay(
     bundle: Path = typer.Argument(..., exists=True, file_okay=False),
     output: Path = Path("runs/replay"),
     profile: Optional[Path] = typer.Option(None, exists=True, dir_okay=False),
-    video: bool = typer.Option(False, "--video", help="Record this replay when display capture is available."),
+    video: bool = typer.Option(False, "--video", help="Record the Gazebo simulator view in an isolated video container."),
+    video_image: str = typer.Option("envfuzz:jazzy-video", "--video-docker-image"),
+    replay_origin: Optional[str] = typer.Option(None, hidden=True),
 ) -> None:
     config_path = bundle / "run.json"
     if not config_path.is_file():
         raise typer.BadParameter("Replay requires a Gazebo run bundle")
     config = json.loads(config_path.read_text(encoding="utf-8"))
+    if video and os.environ.get("ENVFUZZ_VIDEO_CONTAINER") != "1":
+        docker = shutil.which("docker")
+        if docker is None:
+            raise typer.BadParameter("Docker is required for isolated replay video. Build the envfuzz:jazzy-video image first.")
+        replay_origin = replay_origin or str(bundle.resolve())
+        bundle = bundle.resolve()
+        output = output.resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        mounts = [
+            "-v", f"{bundle.parent}:/envfuzz/input:ro",
+            "-v", f"{output.parent}:/envfuzz/output",
+        ]
+        container_args = ["replay", f"/envfuzz/input/{bundle.name}", "--output",
+                          f"/envfuzz/output/{output.name}", "--video", "--replay-origin", replay_origin]
+        if profile is not None:
+            profile = profile.resolve()
+            mounts.extend(["-v", f"{profile.parent}:/envfuzz/profile:ro"])
+            container_args.extend(["--profile", f"/envfuzz/profile/{profile.name}"])
+        command = [
+            docker, "run", "--rm", "--name", f"envfuzz-video-replay-{uuid.uuid4().hex[:12]}",
+            *mounts,
+            video_image,
+            *container_args,
+        ]
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True,
+                                       timeout=float(config["watchdog"]) + 45)
+        except subprocess.TimeoutExpired as error:
+            container_name = command[command.index("--name") + 1]
+            subprocess.run([docker, "kill", container_name], capture_output=True, timeout=5, check=False)
+            raise typer.BadParameter("The isolated graphical replay exceeded its watchdog timeout.") from error
+        if completed.stdout:
+            typer.echo(completed.stdout, nl=False)
+        if completed.returncode not in (0, 2):
+            raise typer.BadParameter(completed.stderr.strip() or "Isolated graphical replay failed to start.")
+        if completed.stderr:
+            typer.echo(completed.stderr, err=True, nl=False)
+        return
     params = bundle / "nav2.yaml"
     baseline_file = bundle / "baseline.json"
     oracle_file = bundle / "oracle.yaml"
@@ -194,7 +259,8 @@ def replay(
         profile,
         config.get("keepout_filter", False),
         video,
-        str(bundle),
+        replay_origin or str(bundle),
+        video,
     )
 
 
@@ -332,6 +398,41 @@ def review_update(
     except (OSError, ValueError, ValidationError) as error:
         raise typer.BadParameter(str(error)) from error
     typer.echo(str(target))
+
+
+@app.command("review")
+def review_command(
+    campaign: Path = typer.Argument(..., exists=True, file_okay=False),
+    serve: bool = typer.Option(False, "--serve", help="Start the local campaign review web server."),
+    host: str = typer.Option("127.0.0.1", help="Host interface. Loopback is the default."),
+    port: int = typer.Option(8765, min=1, max=65535),
+    no_open: bool = typer.Option(False, "--no-open", help="Do not open a browser automatically."),
+    replay_backend: str = typer.Option("docker", "--replay-backend", help="Replay backend: local or docker."),
+    image: str = typer.Option("envfuzz:jazzy", "--docker-image"),
+    video_image: str = typer.Option("envfuzz:jazzy-video", "--video-docker-image"),
+) -> None:
+    """Serve an interactive local failure-review GUI."""
+    if not serve:
+        raise typer.BadParameter("Use --serve to start the campaign review GUI.")
+    if replay_backend not in {"local", "docker"}:
+        raise typer.BadParameter("--replay-backend must be local or docker.")
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        typer.echo(
+            "Warning: remote server binding exposes local campaign and replay operations.",
+            err=True,
+        )
+    try:
+        serve_review(
+            campaign,
+            host=host,
+            port=port,
+            open_browser=not no_open,
+            backend=replay_backend,
+            image=image,
+            video_image=video_image,
+        )
+    except (OSError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
 
 
 @app.command("review-archive")

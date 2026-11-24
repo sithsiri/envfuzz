@@ -1,11 +1,11 @@
-# Spec Delta
+# Episode Video Evidence Specification
 
 ## Purpose
 
 Provide optional recorded evidence for notable episodes without making video
 capture or a display server a requirement for campaigns.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Optional episode video capture
 The system SHALL allow operators to request video for an individual episode,
@@ -49,3 +49,28 @@ or navigation result.
 - **WHEN** the recording process fails during an episode
 - **THEN** the bundle reports the recording failure separately and retains every
   other available diagnostic artifact
+
+### Requirement: Request replay evidence from the review GUI
+The system SHALL allow an operator to start replay evidence generation for a
+selected candidate from the local review interface.
+
+#### Scenario: An operator requests a replay
+- **WHEN** the operator starts a replay for a candidate
+- **THEN** the reviewer creates a bounded asynchronous replay job
+- **AND** the job records queued, running, completed, failed, and cancelled states
+- **AND** repeated replay attempts remain separately traceable
+
+#### Scenario: An operator requests replay video
+- **WHEN** the operator enables video while starting replay
+- **THEN** the replay bundle uses the existing replay-origin and video metadata contracts
+- **AND** the interface reports when video is available or unavailable
+
+#### Scenario: An operator retries an interesting replay
+- **WHEN** a replay job completes
+- **THEN** the interface links the new replay bundle and its result evidence
+- **AND** it preserves the original candidate and prior replay bundles
+
+#### Scenario: Replay infrastructure is unavailable
+- **WHEN** the local host cannot launch the replay backend
+- **THEN** the job reports an explicit infrastructure failure
+- **AND** the interface preserves the original bundle and manual-review state

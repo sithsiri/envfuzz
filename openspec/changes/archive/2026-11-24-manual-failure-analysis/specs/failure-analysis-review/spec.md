@@ -59,3 +59,35 @@ from confirmed navigation behavior failures.
 - **WHEN** repeated replay outcomes do not match the candidate signature
 - **THEN** the review record reports the candidate as not reproducible and does
   not automatically classify it as a confirmed regression
+
+### Requirement: Provide an interactive local campaign reviewer
+The system SHALL provide a loopback-first web review interface through the
+EnvFuzz CLI.
+
+#### Scenario: An operator starts the reviewer
+- **WHEN** the operator runs `envfuzz review CAMPAIGN --serve`
+- **THEN** the system opens or prints a local browser URL
+- **AND** the interface presents behavior-failure candidates derived from the
+  campaign evidence
+
+#### Scenario: An operator filters the review queue
+- **WHEN** the operator filters by layout, strategy, outcome, review status,
+  failure category, confidence, or replay reproducibility
+- **THEN** only matching candidates are shown
+- **AND** the filter state is independent of campaign result artifacts
+
+#### Scenario: An operator inspects a candidate
+- **WHEN** the operator opens a candidate in the reviewer
+- **THEN** the interface links or renders existing bundle diagnostics,
+  trajectory evidence, telemetry, logs, scenario geometry, and map comparison
+- **AND** it identifies the original case and attempt without ambiguity
+
+#### Scenario: An operator updates a review
+- **WHEN** the operator saves a classification in the reviewer
+- **THEN** the manual-review record is updated using the existing review schema
+- **AND** changing review state does not modify the result bundle or hashes
+
+#### Scenario: The server is reached without explicit remote binding
+- **WHEN** the reviewer starts without a remote host option
+- **THEN** it binds only to loopback
+- **AND** it does not expose review operations beyond the local machine

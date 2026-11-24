@@ -23,7 +23,7 @@ completed missions, then by median successful simulated duration.
 
 1. Select the world and mission, allowed edits, robot and simulation
    profile. Keep scenario, baseline, and configuration files beside the
-   challenge manifest or in its subdirectories. See [supported profiles](phase-3-profiles.md).
+   challenge manifest or in its subdirectories.
 2. Calibrate the unfuzzed mission with the selected profile using
    `envfuzz baseline`. Keep the runtime image, calibration, profile, limits
    and oracle configuration fixed across submissions to the same version.
@@ -52,7 +52,7 @@ Organizer-owned sensor fixtures can be checked with
 ## Extending the benchmark
 
 - **Detectors** use the trusted `envfuzz.detectors` entry point documented
-  in the [Phase 2 workflow](phase-2.md). Add a synthetic trace with a
+  in the source package. Add a synthetic trace with a
   known expected event and score before enabling a detector in a challenge.
 - **Scene edits** extend the validated operators in `variants.py` and the
   declared edit budget. Keep seed use explicit and test that invalid
@@ -61,4 +61,4 @@ Organizer-owned sensor fixtures can be checked with
   Compare coverage and runtime at equal budgets on the same saved fixtures.
 - **Sensors** use a versioned profile flag, a simulator-side declaration
   and a read-only bridge into recorded telemetry. Verify timestamps and
-  test the observation against a fixed fixture. See the [sensor guide](phase-3-sensors.md).
+  test the observation against a fixed fixture.

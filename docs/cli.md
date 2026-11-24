@@ -8,6 +8,12 @@
   `--baseline FILE` to score the mission.
 - `envfuzz replay BUNDLE --output DIR` repeats a live mission using its saved
   scenario, limits, and Nav2 parameters.
+- `envfuzz review-export CAMPAIGN` exports timeout and mission-failure candidates
+  as `review-candidates.json` and `review-candidates.csv`.
+- `envfuzz review-update CAMPAIGN` creates or updates a structured manual
+  root-cause record.
+- `envfuzz report CAMPAIGN --outcome timeout --review-status confirmed`
+  filters campaign review evidence.
 - `envfuzz report BUNDLE` writes a standalone trajectory SVG in the bundle.
 - `envfuzz baseline [FILE] --n 10 --output DIR` measures mission duration and
   calibrates SLAM position error. Omit `FILE` for the default empty apartment.

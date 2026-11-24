@@ -6,13 +6,6 @@ claims numbered jobs from a ledger in that directory. It runs every job through
 the same resource-limited Docker worker as `campaign --workers`, and the
 organizer reconciles one authoritative result per case.
 
-Status: the claim ledger, lease recovery, retry budget, result deduplication,
-and the worker circuit breaker are covered by fake-worker tests
-(`tests/test_claims.py`, `tests/test_multihost_workers.py`, and
-`tests/test_analysis_durable.py`). A live two-host CPU run has not been
-recorded yet. The commands for it are in
-[Two-host CPU smoke run](#two-host-cpu-smoke-run).
-
 ## How it works
 
 - `campaign-approve` freezes `plan.json` and creates `claims.sqlite3` next to
@@ -58,24 +51,6 @@ recorded yet. The commands for it are in
   failures, and interrupted episodes. If a newer attempt holds the case, a late
   failure is recorded but does not touch the newer attempt.
 
-### What the ledger's SQLite triggers enforce
-
-- `job_attempts`: a finished row cannot be updated. An unfinished row's case,
-  attempt number, worker, host, claim time, and lease cannot change. Rows
-  cannot be deleted. An existing `(case, attempt)` cannot be inserted again,
-  so `INSERT OR REPLACE` is refused.
-- `jobs`: rows cannot be deleted or inserted again. The case ID and plan hash
-  cannot change, the attempt counter cannot decrease, and an authoritative
-  attempt cannot change once set.
-- `ledger_meta`: entries cannot be updated, deleted, or inserted again.
-
-Each envfuzz connection also sets `PRAGMA recursive_triggers=ON`. Job state,
-leases, and the retry budget used are ordinary columns that envfuzz itself
-updates. Direct SQL can still change them. The triggers stop accidental edits
-and tools that write through SQLite. They do not stop a host with write access
-to the shared directory, which can drop the triggers or replace the file. That
-case is out of scope: see [Approved workers](#approved-workers).
-
 ## Leases and retries
 
 | Setting | Where | Meaning |
@@ -115,8 +90,7 @@ lease at or below `watchdog + 120` seconds:
 - two ledger lock waits of up to 30 s each;
 - a 15 s margin.
 
-For `examples/phase2-campaign.yaml` and the smoke manifest below (both have
-watchdog 80), the lease must exceed 200 s. Leases are capped at 24 hours and
+For manifests with a 80-second watchdog, the lease must exceed 200 s. Leases are capped at 24 hours and
 are not renewed while an episode runs. Claim and finish times are read after
 the ledger's write lock is acquired, so waiting for the lock does not shorten
 the lease.
@@ -252,78 +226,3 @@ Either option keeps the same plan, bundle format, and worker limits:
   against its directory, then `campaign-reconcile`. If the campaign moves to
   local disk, copy the whole directory while no worker is running.
 
-## Two-host CPU smoke run
-
-You need two Linux hosts, A and B. Each has Docker, the same envfuzz checkout
-installed with `python -m pip install -e '.[test]'`, and the image built with
-`docker build -t envfuzz:jazzy .`. Both mount the shared filesystem at
-`/shared`. On each host, run `envfuzz doctor` and `docker image inspect
-envfuzz:jazzy --format '{{.Id}}'` and record the output.
-
-1. Organizer, on host A: write a small manifest and approve both workers.
-
-   ```sh
-   mkdir -p /shared
-   cat > /shared/smoke.yaml <<'EOF'
-   layouts: [corridor]
-   methods: [uniform]
-   seeds: [42]
-   episodes_per_cell: 4
-   timeout: 25
-   watchdog: 80
-   EOF
-   envfuzz campaign-approve /shared/smoke.yaml --output /shared/smoke \
-     --worker-id host-a --worker-id host-b --retries 1
-   ```
-
-2. Start both workers at the same time. Run host A's in the foreground:
-
-   ```sh
-   # host A
-   envfuzz campaign-worker /shared/smoke.yaml --output /shared/smoke \
-     --worker-id host-a --worker-cpus 2 --worker-memory 1536m --lease-s 240
-   # host B
-   envfuzz campaign-worker /shared/smoke.yaml --output /shared/smoke \
-     --worker-id host-b --worker-cpus 2 --worker-memory 1536m --lease-s 240
-   ```
-
-3. Recovery check. While host A is running an episode, kill its worker
-   process, then remove the orphaned container. `kill -9` does not stop a
-   container that is already running.
-
-   ```sh
-   # host A
-   pkill -9 -f 'envfuzz campaign-worker'
-   docker ps --filter label=org.envfuzz.worker --format '{{.Names}}' | xargs -r docker rm -f
-   ```
-
-   Host B keeps polling. Host A's lease expires 240 s after its claim. After
-   that, host B claims the abandoned case as a new attempt as soon as it
-   finishes its current episode or its next poll runs. Then it exits once
-   every case is finished.
-
-4. Optional: after step 3, restart host A's worker with the same command. It
-   picks up any case that is still queued or whose lease has expired.
-
-5. Organizer: reconcile and inspect.
-
-   ```sh
-   envfuzz campaign-reconcile /shared/smoke
-   python -m json.tool /shared/smoke/claims.json | less
-   ```
-
-Acceptance:
-
-- `campaign-reconcile` exits 0 and reports `4 of 4 cases have an
-  authoritative result`.
-- In `claims.json`, every job is `completed` and has exactly one
-  `authoritative` attempt.
-- The case killed in step 3 shows host A's attempt as `lease_expired` and a
-  later attempt by host B as `authoritative`.
-- Attempts from both `host-a` and `host-b` appear, with their host names.
-- Each authoritative bundle has the single-host layout and its own
-  `worker.json` limits.
-
-Record the hosts, filesystem and mount options, image IDs, and the outcome
-counts from `claims.json`. Don't mark the run as passed until these are
-recorded.

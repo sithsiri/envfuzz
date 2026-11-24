@@ -103,19 +103,14 @@ simulation time.
 
 ## Documentation
 
+- [Architecture](docs/architecture.md): system boundaries, execution flow, and
+  durable artifacts.
 - [CLI reference](docs/cli.md): commands, options, and result formats.
 - [Simulation assets](docs/simulation-assets.md): robot model and ROS interfaces.
-- [Phase 2 workflow](docs/phase-2.md): parallel runs, map diagnostics, and
-  classroom evaluation.
 - [Multi-host campaigns](docs/multi-host.md): worker claims, leases, and
   reconciliation.
+- [Manual failure analysis](docs/failure-analysis.md): candidate export,
+  root-cause review, replay verification, and presentation evidence.
 - [Classroom guide](docs/classroom-guide.md): participant submissions and
   organizer verification.
-- [Simulation profiles](docs/phase-3-profiles.md): robot and sensor profiles.
-- [Progress and evidence](docs/progress.md): project status and links to
-  verification records.
-- [Architecture decisions](docs/adr/): durable design decisions.
 - [OpenSpec changes](openspec/changes/): requirements and implementation plans.
-
-The [quickstart](docs/quickstart.md) is a short entry point to the run and
-development instructions in this README.

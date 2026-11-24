@@ -1,4 +1,4 @@
-# Phase 1 simulation assets
+# Simulation assets
 
 The scenario compiler generates the room floor, walls, and obstacles from SDF
 primitives. The default mission and an example restricted polygon are in
@@ -23,3 +23,51 @@ descriptions are loaded from the installed package.
 | `/map` | SLAM occupancy grid |
 | `/cmd_vel` | Nav2 velocity commands to the simulated differential drive |
 | `/navigate_to_pose` | Nav2 goal action |
+
+## Robot and navigation profiles
+
+Profiles are version 1 YAML files for organizing robot and Nav2 configurations.
+The default profile uses the TurtleBot3 Waffle, SLAM Toolbox, planar LiDAR,
+and CPU-only execution. A profile can select another robot or navigation
+backend and bundle the resolved settings with each result for replay.
+
+```sh
+envfuzz baseline examples/scenario.yaml \
+  --profile examples/compact-vacuum-profile.yaml --output runs/compact-baseline
+envfuzz run examples/scenario.yaml \
+  --profile examples/compact-vacuum-profile.yaml --baseline runs/compact-baseline/baseline.json \
+  --output runs/compact
+envfuzz replay runs/compact --output runs/compact-replay
+```
+
+Scoring baselines must use the same scenario, Nav2 settings, robot, and profile.
+Existing bundles without a profile retain their implicit default settings.
+
+Available examples include AMCL localization, LiDAR-only RTAB-Map, and an
+optional GPU-gated RTAB-Map camera profile. The LiDAR-only and camera profiles
+require matching baselines. The camera profile is not available on a CPU-only
+worker.
+
+## Optional observations
+
+Profiles can opt into diagnostic streams that do not feed navigation or oracle
+scoring:
+
+| Flag | Stream | Description |
+| --- | --- | --- |
+| `record_contacts` | `contacts.jsonl` | Bumper collision pairs and simulation timestamps |
+| `record_cliff` | `cliff.jsonl` | Down-facing cliff sensor transitions |
+| `record_motion` | `motion.jsonl` | IMU, wheel odometry, and timestamped poses |
+
+Version 2 scenarios can declare floor drops and friction patches. They are
+validated with the rest of the scenario, compiled into the world, and archived
+with the run bundle.
+
+```sh
+envfuzz run examples/bumper-contact.yaml --profile examples/bumper-profile.yaml \
+  --output runs/bumper
+envfuzz run examples/cliff-drop.yaml --profile examples/cliff-profile.yaml \
+  --output runs/cliff
+envfuzz run examples/friction-patch.yaml --profile examples/motion-profile.yaml \
+  --output runs/friction
+```

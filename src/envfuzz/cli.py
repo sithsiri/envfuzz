@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 import tempfile
 from typing import List, Optional
@@ -28,6 +29,16 @@ from .sensor_fixtures import check_sensor_fixtures
 from .fuzzer import fuzz
 from .gazebo import run_gazebo
 from .minimize import minimize_run
+from .manual_review import (
+    ManualReview,
+    export_failure_candidates,
+    upsert_manual_review,
+)
+from .episode_video import (
+    export_presentation_archive,
+    finish_video_capture,
+    start_video_capture,
+)
 from .runner import EpisodeRunner
 from .workers import WorkerLimits
 
@@ -136,8 +147,11 @@ def run_command(
     oracle_file: Optional[Path] = typer.Option(None, "--oracle", exists=True, dir_okay=False),
     profile_file: Optional[Path] = typer.Option(None, "--profile", exists=True, dir_okay=False),
     keepout_filter: bool = typer.Option(False, "--keepout-filter", help="Enable Nav2's Keepout Filter for restricted zones."),
+    video: bool = typer.Option(False, "--video", help="Record an optional episode video when display capture is available."),
+    replay_origin: Optional[str] = typer.Option(None, hidden=True),
 ) -> None:
     scenario = load_scenario(path)
+    capture = start_video_capture(output, replay_origin) if video else None
     try:
         if smoke:
             if keepout_filter or any(path is not None for path in (params_file, baseline_file, oracle_file, profile_file)):
@@ -148,6 +162,8 @@ def run_command(
         else:
             result = run_gazebo(scenario, output, timeout, watchdog, params_file, baseline_file,
                                 oracle_file, profile_file, keepout_filter)
+        if capture is not None:
+            finish_video_capture(output, capture)
     except FileExistsError as error:
         raise typer.BadParameter(f"Choose a new output directory: {output}") from error
     except (OSError, ValueError) as error:
@@ -160,6 +176,7 @@ def replay(
     bundle: Path = typer.Argument(..., exists=True, file_okay=False),
     output: Path = Path("runs/replay"),
     profile: Optional[Path] = typer.Option(None, exists=True, dir_okay=False),
+    video: bool = typer.Option(False, "--video", help="Record this replay when display capture is available."),
 ) -> None:
     config_path = bundle / "run.json"
     if not config_path.is_file():
@@ -176,6 +193,8 @@ def replay(
         oracle_file if oracle_file.is_file() else None,
         profile,
         config.get("keepout_filter", False),
+        video,
+        str(bundle),
     )
 
 
@@ -207,13 +226,19 @@ def report_command(
     tier: Optional[str] = typer.Option(None),
     scenario_hash: Optional[str] = typer.Option(None),
     minimum_score: Optional[int] = typer.Option(None, "--min-score"),
+    outcome: Optional[str] = typer.Option(None),
+    review_status: Optional[str] = typer.Option(None),
+    failure_category: Optional[str] = typer.Option(None),
+    confidence: Optional[str] = typer.Option(None),
 ) -> None:
     campaign = (bundle / "plan.json").is_file()
     target = output if output is not None else bundle / ("report.html" if campaign else "trajectory.svg")
     try:
         if campaign:
             render_campaign_report(bundle, target, strategy=strategy, tier=tier,
-                                   scenario_hash=scenario_hash, minimum_score=minimum_score)
+                                   scenario_hash=scenario_hash, minimum_score=minimum_score,
+                                   outcome=outcome, review_status=review_status,
+                                   failure_category=failure_category, confidence=confidence)
         else:
             render_report(bundle, target)
     except (OSError, ValueError) as error:
@@ -250,6 +275,76 @@ def analyze(
     except (OSError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error
     typer.echo(f"{report['shared_budget']} episodes per strategy. {target}")
+
+
+@app.command("review-export")
+def review_export(
+    campaign: Path = typer.Argument(..., exists=True, file_okay=False),
+    output_json: Optional[Path] = typer.Option(None),
+    output_csv: Optional[Path] = typer.Option(None),
+) -> None:
+    """Export behavior failure candidates for manual classification."""
+    target_json = output_json if output_json is not None else campaign / "review-candidates.json"
+    target_csv = output_csv if output_csv is not None else campaign / "review-candidates.csv"
+    try:
+        report = export_failure_candidates(campaign, target_json, target_csv)
+    except (OSError, ValueError, sqlite3.Error) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(f"{report['candidate_count']} candidates. {target_json} {target_csv}")
+
+
+@app.command("review-update")
+def review_update(
+    campaign: Path = typer.Argument(..., exists=True, file_okay=False),
+    case: int = typer.Option(..., min=1),
+    attempt: int = typer.Option(1, min=1),
+    observed_status: str = typer.Option(...),
+    observed_classification: str = typer.Option("behavior"),
+    bundle: str = typer.Option(...),
+    review_status: str = typer.Option("reviewing"),
+    failure_category: str = typer.Option("unknown"),
+    root_cause_category: str = typer.Option("unknown"),
+    confidence: Optional[str] = typer.Option(None),
+    reproducibility: str = typer.Option("unknown"),
+    evidence_summary: str = typer.Option(""),
+    presentation_candidate: bool = typer.Option(False),
+    video: Optional[str] = typer.Option(None),
+) -> None:
+    """Create or update a structured manual-analysis record."""
+    try:
+        review = ManualReview(
+            campaign=campaign.name,
+            case=case,
+            attempt=attempt,
+            bundle=bundle,
+            observed_status=observed_status,
+            observed_classification=observed_classification,
+            review_status=review_status,
+            failure_category=failure_category,
+            root_cause_category=root_cause_category,
+            confidence=confidence,
+            reproducibility=reproducibility,
+            evidence_summary=evidence_summary,
+            presentation_candidate=presentation_candidate,
+            video=video,
+        )
+        target = upsert_manual_review(campaign, review)
+    except (OSError, ValueError, ValidationError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(str(target))
+
+
+@app.command("review-archive")
+def review_archive(
+    campaign: Path = typer.Argument(..., exists=True, file_okay=False),
+    output: Path = typer.Option(Path("runs/presentation-evidence")),
+) -> None:
+    """Copy marked presentation candidates and their bundle evidence into an archive."""
+    try:
+        report = export_presentation_archive(campaign, output)
+    except (OSError, ValueError, FileExistsError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(f"{len(report['cases'])} presentation candidates. {output}")
 
 
 @app.command("minimize")
@@ -307,6 +402,7 @@ def campaign_command(
     worker_cpus: float = typer.Option(2.0, min=0.1),
     worker_memory: str = typer.Option("1536m"),
     retries: int = typer.Option(2, min=0),
+    video: bool = typer.Option(False, "--video", help="Record single-host episodes when display capture is available."),
 ) -> None:
     try:
         reject_durable_ledger(output)
@@ -316,8 +412,13 @@ def campaign_command(
     typer.echo(f"{len(cases)} cases in {output / 'plan.json'}")
     if not plan_only:
         try:
+            if video and workers is not None:
+                raise typer.BadParameter("Campaign video capture is available only for single-host campaigns")
             if workers is None:
-                complete = run_campaign(config, cases, output)
+                if video:
+                    complete = run_campaign(config, cases, output, video=True)
+                else:
+                    complete = run_campaign(config, cases, output)
             else:
                 complete = run_parallel_campaign(
                     config, cases, output, workers, WorkerLimits(image, worker_cpus, worker_memory), retries,

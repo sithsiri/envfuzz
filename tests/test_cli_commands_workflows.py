@@ -71,6 +71,55 @@ def test_analyze_turns_index_errors_into_bad_parameter(tmp_path, monkeypatch):
     assert "plan.json missing" in _plain(result)
 
 
+def test_review_export_writes_candidate_files(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        cli,
+        "export_failure_candidates",
+        lambda root, json_output, csv_output: calls.append((root, json_output, csv_output))
+        or {"candidate_count": 3},
+    )
+
+    result = _invoke("review-export", tmp_path)
+
+    assert result.exit_code == 0
+    assert result.output == (
+        f"3 candidates. {tmp_path / 'review-candidates.json'} "
+        f"{tmp_path / 'review-candidates.csv'}\n"
+    )
+    assert calls == [(
+        tmp_path,
+        tmp_path / "review-candidates.json",
+        tmp_path / "review-candidates.csv",
+    )]
+
+
+def test_review_update_writes_valid_record(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "upsert_manual_review", lambda root, review: calls.append((root, review))
+                       or root / "manual-reviews.json")
+
+    result = _invoke(
+        "review-update", tmp_path,
+        "--case", "4",
+        "--attempt", "2",
+        "--observed-status", "mission_failed",
+        "--observed-classification", "behavior",
+        "--bundle", "case-000004/attempt-000002/bundle",
+        "--review-status", "confirmed",
+        "--failure-category", "planning",
+        "--root-cause-category", "blocked_route",
+        "--confidence", "high",
+        "--reproducibility", "reproducible",
+        "--presentation-candidate",
+        "--video", "case-000004.mp4",
+    )
+
+    assert result.exit_code == 0
+    assert calls[0][0] == tmp_path
+    assert calls[0][1].root_cause_category == "blocked_route"
+
+
 def test_minimize_reports_remaining_objects(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "minimize_run", lambda *args: calls.append(args) or {"remaining_objects": 2})

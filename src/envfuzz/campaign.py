@@ -110,7 +110,7 @@ def _save_summary(path: Path, rows: list[dict]) -> None:
     temporary.replace(path)
 
 
-def run_campaign(manifest: Campaign, cases: list[Case], output: Path) -> bool:
+def run_campaign(manifest: Campaign, cases: list[Case], output: Path, video: bool = False) -> bool:
     reject_durable_ledger(output)
     rows = []
     for index, case in enumerate(cases, 1):
@@ -124,7 +124,14 @@ def run_campaign(manifest: Campaign, cases: list[Case], output: Path) -> bool:
         if result is None or result.classification != "behavior":
             if attempts:
                 attempt = directory / f"attempt-{int(attempt.name.split('-')[-1]) + 1:06d}"
+            if video:
+                from .episode_video import finish_video_capture, start_video_capture
+                capture = start_video_capture(attempt)
+            else:
+                capture = None
             result = run_gazebo(case.scenario, attempt, manifest.timeout, manifest.watchdog)
+            if capture is not None:
+                finish_video_capture(attempt, capture)
         rows.append(_summary_row(index, case, output, attempt, result))
         _save_summary(output / "results.csv", rows)
         if result.classification != "behavior":

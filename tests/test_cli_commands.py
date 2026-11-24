@@ -395,7 +395,9 @@ def test_report_on_campaign_forwards_filters_to_campaign_report(tmp_path, monkey
     assert result.exit_code == 0
     assert result.output == f"{campaign / 'report.html'}\n"
     assert calls == [(campaign, campaign / "report.html",
-                      {"strategy": "uniform", "tier": "T2", "scenario_hash": "abc", "minimum_score": 4})]
+                      {"strategy": "uniform", "tier": "T2", "scenario_hash": "abc", "minimum_score": 4,
+                       "outcome": None, "review_status": None,
+                       "failure_category": None, "confidence": None})]
 
 
 def test_show_writes_diagnostics_page(tmp_path):

@@ -119,6 +119,8 @@ def _index_attempt_folders(database: sqlite3.Connection, root: Path, plan: dict)
 def render_campaign_report(
     root: Path, output: Path, *, strategy: str | None = None, tier: str | None = None,
     scenario_hash: str | None = None, minimum_score: int | None = None,
+    outcome: str | None = None, review_status: str | None = None,
+    failure_category: str | None = None, confidence: str | None = None,
 ) -> None:
     refresh_index(root)
     filters, values = [], []
@@ -141,16 +143,52 @@ def render_campaign_report(
     except sqlite3.Error as error:
         raise index_error(root, error) from error
     counts = "".join(f"<li>{escape(category)}: {count}</li>" for category, count in outcomes)
+    reviews = {}
+    review_path = root / "manual-reviews.json"
+    if review_path.is_file():
+        try:
+            review_data = json.loads(review_path.read_text(encoding="utf-8"))
+            reviews = {(row["case"], row["attempt"]): row for row in review_data.get("reviews", [])}
+        except (OSError, json.JSONDecodeError):
+            reviews = {}
     body = []
     for case, attempt, layout, method, status, score, bundle in rows:
+        review = reviews.get((case, attempt), {})
+        if outcome and status != outcome:
+            continue
+        if review_status and review.get("review_status", "unreviewed") != review_status:
+            continue
+        if failure_category and review.get("failure_category", "unknown") != failure_category:
+            continue
+        if confidence and review.get("confidence") != confidence:
+            continue
         link = "-"
         if bundle:
             target = (root / bundle / "result.json").resolve()
             link = f'<a href="{quote(os.path.relpath(target, output.resolve().parent))}">Result</a>'
-        cells = (case, attempt, layout, method, status, score)
+        diagnostics = "-"
+        if bundle:
+            diagnostic_target = (root / bundle / "diagnostics.html").resolve()
+            if diagnostic_target.is_file():
+                diagnostics = f'<a href="{quote(os.path.relpath(diagnostic_target, output.resolve().parent))}">Diagnostics</a>'
+        log_link = "-"
+        if bundle and (root / bundle / "logs.txt").is_file():
+            log_target = (root / bundle / "logs.txt").resolve()
+            log_link = f'<a href="{quote(os.path.relpath(log_target, output.resolve().parent))}">Logs</a>'
+        cells = (
+            case, attempt, layout, method, status, score,
+            review.get("review_status", "unreviewed"),
+            review.get("failure_category", "unknown"),
+            review.get("confidence") or "-",
+            review.get("reproducibility", "unknown"),
+        )
         body.append("<tr>" + "".join(f"<td>{escape(str(cell))}</td>" for cell in cells)
-                    + f"<td>{link}</td></tr>")
-    headings = "".join(f"<th>{name}</th>" for name in ("Case", "Attempt", "Layout", "Strategy", "Status", "Score", "Bundle"))
+                    + f"<td>{link}</td><td>{diagnostics}</td><td>{log_link}</td></tr>")
+    headings = "".join(f"<th>{name}</th>" for name in (
+        "Case", "Attempt", "Layout", "Strategy", "Status", "Score",
+        "Review", "Failure category", "Confidence", "Reproducibility",
+        "Bundle", "Diagnostics", "Logs",
+    ))
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         '<!doctype html><html lang="en"><meta charset="utf-8"><title>EnvFuzz campaign</title>'

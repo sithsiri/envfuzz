@@ -92,6 +92,12 @@ def export_failure_candidates(root: Path, output_json: Path, output_csv: Path) -
         case_data = plan["cases"][case - 1]
         challenge = case_data["scenario"].get("challenge", {})
         record = reviews.get(case, {}).get(attempt)
+        result_path = (root / bundle / "result.json").resolve()
+        try:
+            result_path.relative_to(root)
+            sim_duration = json.loads(result_path.read_text(encoding="utf-8")).get("sim_duration")
+        except (OSError, ValueError, TypeError):
+            sim_duration = None
         candidates.append({
             "campaign": root.name,
             "case": case,
@@ -99,6 +105,7 @@ def export_failure_candidates(root: Path, output_json: Path, output_csv: Path) -
             "layout": layout,
             "strategy": strategy,
             "status": status,
+            "sim_duration": sim_duration,
             "classification": classification,
             "bundle": bundle,
             "width_bin": challenge.get("width_bin"),
@@ -117,7 +124,7 @@ def export_failure_candidates(root: Path, output_json: Path, output_csv: Path) -
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_json.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     fields = list(candidates[0]) if candidates else [
-        "campaign", "case", "attempt", "layout", "strategy", "status", "classification",
+        "campaign", "case", "attempt", "layout", "strategy", "status", "sim_duration", "classification",
         "bundle", "width_bin", "clutter_count", "goal_distance_bin", "review_status",
         "failure_category", "root_cause_category", "confidence", "reproducibility",
         "presentation_candidate", "video",

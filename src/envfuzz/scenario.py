@@ -493,6 +493,9 @@ def _add_review_markers(world: ET.Element, scenario: Scenario) -> None:
         def visual(name: str, z: float, geometry: str, dimensions: dict[str, str]) -> None:
             element = ET.SubElement(link, "visual", name=name)
             ET.SubElement(element, "pose").text = f"0 0 {z} 0 0 0"
+            # Keep review-only visuals out of rendering sensors while leaving
+            # them visible to the normal Gazebo GUI camera.
+            ET.SubElement(element, "visibility_flags").text = "2"
             shape = ET.SubElement(ET.SubElement(element, "geometry"), geometry)
             for dimension, value in dimensions.items():
                 ET.SubElement(shape, dimension).text = value
@@ -508,9 +511,10 @@ def _add_review_markers(world: ET.Element, scenario: Scenario) -> None:
         else:
             visual("start_cap", 0.55, "sphere", {"radius": "0.12"})
 
-    marker("envfuzz_start_marker", (scenario.start.x, scenario.start.y, 0), "0.08 0.38 1 1", False)
+    # Float the review pointers above the robot and its planar LiDAR scan.
+    marker("envfuzz_start_marker", (scenario.start.x, scenario.start.y, 1.0), "0.08 0.38 1 1", False)
     for index, goal in enumerate(scenario.goals, 1):
-        marker(f"envfuzz_goal_marker_{index:02d}", (goal.x, goal.y, 0), "0.12 0.92 0.24 1", True)
+        marker(f"envfuzz_goal_marker_{index:02d}", (goal.x, goal.y, 1.0), "0.12 0.92 0.24 1", True)
 
 
 def _add_static_model(

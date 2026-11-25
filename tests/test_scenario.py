@@ -33,6 +33,9 @@ def test_scene_broadcaster_is_only_added_for_graphical_replay():
     assert headless.find(".//model[@name='floor']/link/visual/material") is None
     assert graphical.find(".//model[@name='envfuzz_start_marker']") is not None
     assert graphical.find(".//model[@name='envfuzz_goal_marker_01']") is not None
+    for marker in graphical.findall(".//model[@name='envfuzz_start_marker']") + graphical.findall(".//model[@name='envfuzz_goal_marker_01']"):
+        assert float(marker.findtext("pose").split()[2]) == 1.0
+        assert marker.findtext(".//visual/visibility_flags") == "2"
     assert headless.find(".//model[@name='envfuzz_start_marker']") is None
     assert headless.find(".//model[@name='envfuzz_goal_marker_01']") is None
 

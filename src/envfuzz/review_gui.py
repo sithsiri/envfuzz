@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import mimetypes
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -24,16 +25,45 @@ from .manual_review import (
 
 
 class ReplayJobs:
+    STORE_NAME = "replay-jobs.json"
+
     def __init__(self, campaign: Path, backend: str, image: str, video_image: str = "envfuzz:jazzy-video"):
         self.campaign = campaign.resolve()
         self.backend = backend
         self.image = image
         self.video_image = video_image
-        self.jobs: dict[str, dict] = {}
+        self.store = self.campaign / "manual-reviews" / self.STORE_NAME
+        self.jobs: dict[str, dict] = self._load()
         self.processes: dict[str, subprocess.Popen] = {}
         self.container_names: dict[str, str] = {}
         self.lock = threading.Lock()
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="envfuzz-replay")
+
+    def _load(self) -> dict[str, dict]:
+        if not self.store.is_file():
+            return {}
+        try:
+            data = json.loads(self.store.read_text(encoding="utf-8"))
+            records = data.get("jobs", [])
+            jobs = {str(job["id"]): job for job in records if isinstance(job, dict) and job.get("id")}
+        except (OSError, ValueError, TypeError, KeyError):
+            return {}
+        changed = False
+        for job in jobs.values():
+            if job.get("state") in {"queued", "running"}:
+                job["state"] = "interrupted"
+                job["error"] = "Review server restarted while replay was active."
+                changed = True
+        if changed:
+            self.jobs = jobs
+            self._save()
+        return jobs
+
+    def _save(self) -> None:
+        self.store.parent.mkdir(parents=True, exist_ok=True)
+        temp = self.store.with_suffix(".json.tmp")
+        temp.write_text(json.dumps({"schema_version": "1", "jobs": list(self.jobs.values())}, indent=2) + "\n", encoding="utf-8")
+        os.replace(temp, self.store)
 
     def create(self, case: int, attempt: int, bundle: str, repeats: int, video: bool) -> dict:
         job_id = uuid.uuid4().hex[:12]
@@ -50,6 +80,7 @@ class ReplayJobs:
         }
         with self.lock:
             self.jobs[job_id] = job
+            self._save()
         self.executor.submit(self.run, job_id)
         return job.copy()
 
@@ -59,6 +90,7 @@ class ReplayJobs:
             if job["state"] == "cancelled":
                 return
             job["state"] = "running"
+            self._save()
 
         source = (self.campaign / job["bundle"]).resolve()
         if not _within(self.campaign, source):
@@ -92,9 +124,11 @@ class ReplayJobs:
                     "bundle": bundle.relative_to(self.campaign).as_posix(),
                     "status": result,
                 })
+                self._save()
                 if result == "launch_failed":
                     job["error"] = "Replay launch failed and produced no result bundle."
                     job["state"] = "failed"
+                    self._save()
                     return
         self._finish(job_id, "completed", None)
 
@@ -170,6 +204,7 @@ class ReplayJobs:
             if job["state"] in {"queued", "running"}:
                 job["state"] = "cancelled"
                 job["error"] = "Cancelled by reviewer."
+                self._save()
             process = self.processes.get(job_id)
             container_name = self.container_names.get(job_id)
         if process is not None:
@@ -190,9 +225,13 @@ class ReplayJobs:
             job = self.jobs[job_id]
             return json.loads(json.dumps(job))
 
-    def all(self) -> list[dict]:
+    def all(self, case: int | None = None, attempt: int | None = None) -> list[dict]:
         with self.lock:
-            return [json.loads(json.dumps(job)) for job in self.jobs.values()]
+            return [
+                json.loads(json.dumps(job)) for job in self.jobs.values()
+                if (case is None or job.get("case") == case)
+                and (attempt is None or job.get("attempt") == attempt)
+            ]
 
     def _finish(self, job_id: str, state: str, error: str | None) -> None:
         with self.lock:
@@ -200,6 +239,7 @@ class ReplayJobs:
             if job["state"] != "cancelled":
                 job["state"] = state
                 job["error"] = error
+                self._save()
 
 
 def _within(root: Path, target: Path) -> bool:
@@ -359,7 +399,13 @@ def create_handler(campaign: Path, jobs: ReplayJobs):
                 else:
                     self._json(404, {"error": "Case not found"})
             elif parsed.path == "/api/jobs":
-                self._json(200, {"jobs": jobs.all()})
+                query = parse_qs(parsed.query)
+                try:
+                    case = int(query["case"][0]) if query.get("case") else None
+                    attempt = int(query["attempt"][0]) if query.get("attempt") else None
+                    self._json(200, {"jobs": jobs.all(case, attempt)})
+                except ValueError as error:
+                    self._json(400, {"error": str(error)})
             elif parsed.path.startswith("/api/jobs/"):
                 job_id = parsed.path.rsplit("/", 1)[-1]
                 try:
@@ -488,6 +534,7 @@ label{display:block;margin-top:8px}
 </main>
 <script>
 const escapeHtml=(s)=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let activeCase=null,activeAttempt=null;
 async function loadCandidates(){
  const element=document.getElementById("candidates");
  element.innerHTML="Loading...";
@@ -499,7 +546,8 @@ async function loadCandidates(){
   const candidates=Array.isArray(data.candidates)?data.candidates:[];
   element.innerHTML=candidates.map(c=>`<div class="candidate" data-case="${c.case}" data-attempt="${c.attempt}">
   <strong>Case ${c.case}, attempt ${c.attempt}</strong><br>
-  <span class="status">${escapeHtml(c.status)}</span> ${escapeHtml(c.layout)} / ${escapeHtml(c.strategy)}
+  <span class="status">${escapeHtml(c.status)}</span> ${escapeHtml(c.layout)} / ${escapeHtml(c.strategy)}<br>
+  <small>Simulation: ${c.sim_duration==null?"unknown":`${Number(c.sim_duration).toFixed(2)} s`}</small>
   </div>`).join("")||"No matching candidates";
   document.querySelectorAll(".candidate").forEach(el=>el.onclick=()=>openCandidate(+el.dataset.case,+el.dataset.attempt));
  }catch(error){
@@ -507,6 +555,7 @@ async function loadCandidates(){
  }
 }
 async function openCandidate(caseId,attempt){
+ activeCase=caseId;activeAttempt=attempt;
  document.querySelectorAll(".candidate").forEach(el=>el.classList.toggle("selected",+el.dataset.case===caseId&&+el.dataset.attempt===attempt));
  const d=await fetch(`/api/cases/${caseId}/attempts/${attempt}`).then(r=>r.json());
  if(d.error){document.getElementById("detail").innerHTML=escapeHtml(d.error);return;}
@@ -580,8 +629,9 @@ async function startReplay(caseId,attempt,bundle){
 }
 async function refreshJobs(){
  const el=document.getElementById("jobs");if(!el)return;
+ if(activeCase===null||activeAttempt===null)return;
  try{
-  const response=await fetch("/api/jobs");
+  const response=await fetch(`/api/jobs?case=${activeCase}&attempt=${activeAttempt}`);
   const data=await response.json();
   el.innerHTML=data.jobs.map(j=>`<div><b>Replay ${j.id}</b>: ${escapeHtml(j.state)} ${j.error?"- "+escapeHtml(j.error):""}<br>${j.results.map(x=>`${x.repeat}: ${escapeHtml(x.status)} <a href="/artifact?path=${encodeURIComponent(x.bundle+"/result.json")}" target="_blank">result</a> ${j.video?`<a href="/artifact?path=${encodeURIComponent(x.bundle+"/video.json")}" target="_blank">video status</a> <a href="/artifact?path=${encodeURIComponent(x.bundle+"/episode.mp4")}" target="_blank">video</a>`:""}`).join("<br>")}</div>`).join("")||"No replay jobs";
  }catch(error){

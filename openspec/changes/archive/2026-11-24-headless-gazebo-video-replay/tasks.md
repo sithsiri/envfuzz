@@ -24,3 +24,10 @@
 
 - [x] 4.1 Run an end-to-end video replay with host `DISPLAY` unset and another display workload active; verify Gazebo video is produced in the replay bundle and the other display remains unaffected.
 - [x] 4.2 Verify ordinary headless episodes and replays remain usable without graphical packages or a display, and that generated videos link to the original case and replay result.
+
+## 5. Preserve and scope reviewer replay history
+
+- [x] 5.1 Persist replay job records and repeat results atomically with the campaign; mark active jobs interrupted after server restart while retaining completed results.
+- [x] 5.2 Filter replay jobs by originating case and attempt in the API and selected-case view.
+- [x] 5.3 Include `sim_duration` from each result in candidate data and display it in the left-hand case queue.
+- [x] 5.4 Elevate graphical start/goal markers and mask them from robot rendering sensors without hiding them from the Gazebo GUI.

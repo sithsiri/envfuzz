@@ -32,6 +32,8 @@ from rclpy.time import Time
 from sensor_msgs.msg import Imu, LaserScan
 from tf2_ros import Buffer, TransformException, TransformListener
 
+from .map_bounds import MapBounds
+
 CONTACT_GAP_S = 0.1
 CLIFF_RANGE_M = 0.20
 
@@ -264,15 +266,42 @@ class Mission(Node):
 
     def run(self, goals: list[dict], launch: subprocess.Popen, timeout: float) -> dict:
         state = None
+        startup_sim_start = None
+        transform_unavailable = False
         while True:
             self.spin(launch)
+            current_time = self.now()
+            if current_time > 0 and startup_sim_start is None:
+                startup_sim_start = current_time
+            if startup_sim_start is not None and current_time - startup_sim_start >= timeout:
+                code = "goal_transform_unavailable" if transform_unavailable else "navigation_startup_unavailable"
+                (self.output / "map-bounds-failure.json").write_text(json.dumps({
+                    "reason_code": code,
+                    "requested_goal": goals[0] if goals else None,
+                    "goal_frame": "scenario-world",
+                    "map_frame": "map",
+                    "observed_bounds": None,
+                }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                (self.output / "metrics.json").write_text(json.dumps({
+                    "goals_reached": 0, "goal_count": len(goals), "path_length_m": self.distance,
+                    "ground_truth_samples": self.samples, "paired_pose_samples": self.paired,
+                    "recoveries": [], "mission_wall_duration_s": 0.0,
+                    "mission_real_time_factor": None, "position_rmse_m": None,
+                }, indent=2) + "\n", encoding="utf-8")
+                return {
+                    "status": "mission_failed", "classification": "behavior",
+                    "reason": f"{code}: navigation transform was not ready before the simulation deadline",
+                    "sim_duration": max(0.0, current_time - startup_sim_start),
+                }
             if not (self.now() > 0 and self.origin is not None and self.client.server_is_ready()):
                 continue
             self.publish_initial_pose()
             try:
                 initial = self.transforms.lookup_transform("map", "base_footprint", Time()).transform
             except TransformException:
+                transform_unavailable = True
                 continue
+            transform_unavailable = False
             if state is None and self.lifecycle.service_is_ready():
                 state = self.lifecycle.call_async(GetState.Request())
             elif state is not None and state.done():
@@ -306,6 +335,38 @@ class Mission(Node):
             return {"status": status, "classification": "behavior",
                     "reason": reason, "sim_duration": duration}
 
+        def bounds_for_latest_map() -> MapBounds | None:
+            message = self.latest_map
+            if message is None or message.header.frame_id != "map":
+                return None
+            info = message.info
+            origin = info.origin
+            try:
+                return MapBounds(
+                    width=info.width, height=info.height, resolution=info.resolution,
+                    origin_x=origin.position.x, origin_y=origin.position.y,
+                    origin_yaw=yaw(origin.orientation),
+                )
+            except (TypeError, ValueError):
+                return None
+
+        def coverage_failure(code: str, goal: dict, bounds: MapBounds | None):
+            details = {
+                "reason_code": code,
+                "requested_goal": {"x": goal["x"], "y": goal["y"], "yaw": goal["yaw"]},
+                "transformed_goal": {
+                    "x": request.pose.pose.position.x, "y": request.pose.pose.position.y,
+                    "yaw": goal["yaw"] + offset,
+                },
+                "goal_frame": "scenario-world",
+                "map_frame": "map",
+                "observed_bounds": bounds.as_dict() if bounds is not None else None,
+            }
+            (self.output / "map-bounds-failure.json").write_text(
+                json.dumps(details, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            return finish("mission_failed", f"{code}: requested goal {goal} is not covered by the active map")
+
         reached = 0
         for goal in goals:
             request = NavigateToPose.Goal()
@@ -316,6 +377,14 @@ class Mission(Node):
             request.pose.pose.position.y = initial.translation.y + dx * s + dy * c
             request.pose.pose.orientation.z = math.sin((goal["yaw"] + offset) / 2)
             request.pose.pose.orientation.w = math.cos((goal["yaw"] + offset) / 2)
+            bounds = bounds_for_latest_map()
+            while bounds is None and self.now() - self.started < timeout:
+                self.spin(launch)
+                bounds = bounds_for_latest_map()
+            if bounds is None:
+                return coverage_failure("map_bounds_unavailable", goal, None)
+            if not bounds.contains(request.pose.pose.position.x, request.pose.pose.position.y):
+                return coverage_failure("navigation_goal_outside_map", goal, bounds)
             self.goal_recoveries = 0
             accepted = self.client.send_goal_async(request, feedback_callback=self.record_feedback)
             if not self.wait(accepted, launch, timeout):

@@ -586,6 +586,9 @@ def _ready_for_run(node, ros, *, lifecycle_states=(ACTIVE_STATE_ID,), transform_
     node.lifecycle.states = list(lifecycle_states)
     node.transforms.transform = _transform(0.0, 0.0, math.pi / 2)
     node.transforms.failures_before_success = transform_failures
+    node.record_map(_occupancy([0], width=1000, height=1000))
+    node.latest_map.info.origin.position.x = -250.0
+    node.latest_map.info.origin.position.y = -250.0
 
     def deliver_origin(spun):
         if spun.origin is None:
@@ -669,6 +672,52 @@ def test_run_reports_failed_navigation_status(make_mission, ros, tmp_path):
     assert result["status"] == "mission_failed"
     assert result["reason"] == f"Nav2 reported action status {ABORTED_STATUS}"
     assert json.loads((tmp_path / "metrics.json").read_text())["goals_reached"] == 0
+
+
+def test_run_never_dispatches_goal_outside_map_and_records_diagnostics(make_mission, ros, tmp_path):
+    node = make_mission()
+    _ready_for_run(node, ros)
+    node.latest_map.info.width = 2
+    node.latest_map.info.height = 2
+
+    result = node.run([{"x": 20.0, "y": 20.0, "yaw": 0.0}], FakeLaunch(), timeout=30)
+
+    assert result["status"] == "mission_failed"
+    assert result["reason"].startswith("navigation_goal_outside_map:")
+    assert node.client.requests == []
+    details = json.loads((tmp_path / "map-bounds-failure.json").read_text())
+    assert details["reason_code"] == "navigation_goal_outside_map"
+    assert details["requested_goal"] == {"x": 20.0, "y": 20.0, "yaw": 0.0}
+    assert details["observed_bounds"]["width"] == 2
+
+
+def test_run_reports_unavailable_map_at_simulation_deadline(make_mission, ros, tmp_path):
+    node = make_mission()
+    _ready_for_run(node, ros)
+    node.latest_map = None
+
+    result = node.run([{"x": 1.0, "y": 2.0, "yaw": 0.0}], FakeLaunch(), timeout=0.5)
+
+    assert result["status"] == "mission_failed"
+    assert result["reason"].startswith("map_bounds_unavailable:")
+    assert node.client.requests == []
+    details = json.loads((tmp_path / "map-bounds-failure.json").read_text())
+    assert details["reason_code"] == "map_bounds_unavailable"
+    assert details["observed_bounds"] is None
+
+
+def test_run_reports_unavailable_goal_transform_at_startup_deadline(make_mission, ros, tmp_path):
+    node = make_mission()
+    _ready_for_run(node, ros)
+    node.transforms.transform = None
+
+    result = node.run([{"x": 1.0, "y": 2.0, "yaw": 0.0}], FakeLaunch(), timeout=0.5)
+
+    assert result["status"] == "mission_failed"
+    assert result["reason"].startswith("goal_transform_unavailable:")
+    assert node.client.requests == []
+    details = json.loads((tmp_path / "map-bounds-failure.json").read_text())
+    assert details["reason_code"] == "goal_transform_unavailable"
 
 
 def test_run_times_out_when_goal_is_never_accepted(make_mission, ros, tmp_path):

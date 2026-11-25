@@ -86,6 +86,11 @@ Start with `result.json`. A mission timeout is a navigation outcome. A launch
 failure or wall-clock watchdog is an infrastructure outcome, with diagnostic
 details in `logs.txt`.
 
+An out-of-map navigation goal ends with reason code
+`navigation_goal_outside_map` before Nav2 dispatch. The bundle includes
+`map-bounds-failure.json` with the requested goal and observed grid bounds;
+this coverage failure is distinct from a Nav2 planner or execution failure.
+
 ## Develop without Docker
 
 With Python 3.10 or newer, install the package in your Python environment and

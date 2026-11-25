@@ -9,6 +9,8 @@ Video recording currently captures the host's X11 display while Gazebo runs in s
 - Add a replay-video path that runs the selected case in Gazebo's graphical simulator and records that view on a headless server.
 - Isolate the graphical display and capture process from host display sessions, with containerized execution as the target deployment model.
 - Preserve the current headless replay and campaign behavior when video is not requested, and retain explicit video status and replay-origin metadata.
+- Persist review replay job history with the campaign so completed replay evidence remains visible after the review server restarts, scoped to its originating case and attempt.
+- Show each case's simulation duration in the review queue.
 - Establish and document the rendering runtime requirements, including whether software rendering is sufficient or GPU access is required.
 
 ## Capabilities

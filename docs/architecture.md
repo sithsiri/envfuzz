@@ -105,3 +105,11 @@ flowchart LR
 
 The episode deadline is based on **simulation time**. Wall-clock time is used
 only by the runner/watchdog to detect startup or infrastructure stalls.
+
+Before each Nav2 dispatch, the ROS mission converts the authored
+scenario-world goal into the `map` frame using the startup map-to-robot
+alignment, then checks it against the latest `/map` occupancy grid. The grid
+origin is the lower-left corner of cell `(0, 0)`, rotated by the origin yaw.
+Its covered area includes the lower edges and excludes the upper edges at
+`origin + (width, height) * resolution`. The check reports map coverage only;
+Nav2 can still fail to plan to an in-bounds goal.

@@ -121,6 +121,20 @@ def robot_sdf(
         _add_cliff_sensor(base_link)
     if camera_profile:
         _add_rgbd_camera(base_link)
+    if os.environ.get("ENVFUZZ_GAZEBO_GUI") == "1":
+        # Review markers use only visibility bit 1. Keep it out of robot
+        # rendering-sensor masks while leaving it available to the GUI camera.
+        for sensor in model.findall(".//sensor"):
+            for sensor_kind in ("lidar", "ray", "camera", "depth_camera", "rgbd_camera"):
+                element = sensor.find(sensor_kind)
+                if element is not None:
+                    mask_target = element.find("camera") if sensor_kind == "rgbd_camera" else element
+                    if mask_target is None:
+                        mask_target = element
+                    mask = mask_target.find("visibility_mask")
+                    if mask is None:
+                        mask = ET.SubElement(mask_target, "visibility_mask")
+                    mask.text = "4294967293"
     sensor = model.find("./link[@name='base_scan']/sensor")
     if "ENVFUZZ_LIDAR_HZ" in os.environ:
         sensor.find("update_rate").text = os.environ["ENVFUZZ_LIDAR_HZ"]

@@ -9,10 +9,16 @@ The system SHALL allow operators to request video for an individual episode, cam
 - **WHEN** an operator enables recording
 - **THEN** the episode bundle includes the video artifact and a bundle-relative reference to it
 
+#### Scenario: A replay is recorded
+- **WHEN** an operator enables video for a replay
+- **THEN** the replay bundle records that it originated from the selected original bundle
+
 #### Scenario: Video is requested for a replay
 - **WHEN** an operator enables video for a selected replay
 - **THEN** the replay bundle includes a video of Gazebo's rendered simulator view and a bundle-relative reference to it
 - **AND** the graphical view marks the robot's start and each navigation goal with distinct colors and shapes
+- **AND** those review-only markers are elevated above the robot's planar sensing layer
+- **AND** their visibility flags exclude them from robot rendering sensors while leaving them visible in the Gazebo GUI
 
 #### Scenario: A replay fails before the robot moves
 - **WHEN** navigation aborts shortly after Gazebo starts
@@ -31,6 +37,21 @@ The system SHALL allow an operator to start replay evidence generation for a sel
 - **THEN** the reviewer creates a bounded asynchronous replay job
 - **AND** the job records queued, running, completed, failed, and cancelled states
 - **AND** repeated replay attempts remain separately traceable
+
+#### Scenario: Replay history survives review server restart
+- **WHEN** the review server restarts after replay jobs have been created
+- **THEN** completed job records and their artifact links remain available from the campaign
+- **AND** queued or running jobs are shown as interrupted with any completed repeat results retained
+
+#### Scenario: Replay history is shown only for its originating candidate
+- **WHEN** an operator views a candidate in the review interface
+- **THEN** the replay list contains only jobs for that case and attempt
+- **AND** switching candidates refreshes the list for the newly selected case and attempt
+
+#### Scenario: Case queue shows simulation duration
+- **WHEN** candidate results include a simulation duration
+- **THEN** the review queue displays that duration beside the case
+- **AND** missing duration values are presented as unknown
 
 #### Scenario: An operator requests replay video
 - **WHEN** the operator enables video while starting replay

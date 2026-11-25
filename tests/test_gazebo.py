@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 from envfuzz.cli import app
 from envfuzz.gazebo import _prepare_review_gui_config, run_gazebo
 from envfuzz.report import render_report
-from envfuzz.scenario import Scenario, load_scenario
+from envfuzz.scenario import Pose, Scenario, load_scenario, validate_scenario
 
 
 def test_review_gui_camera_frames_the_scenario_bounds(tmp_path):
@@ -102,3 +102,37 @@ def test_headless_example_mission(tmp_path):
     assert metrics["paired_pose_samples"] > 0
     render_report(output, output / "trajectory.svg")
     assert ET.parse(output / "trajectory.svg").getroot().tag.endswith("svg")
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(os.environ.get("ENVFUZZ_GAZEBO_TEST") != "1", reason="requires ROS 2 and Gazebo")
+def test_goal_outside_generated_map_is_not_dispatched(tmp_path):
+    scenario = Scenario(
+        goals=[Pose(x=50.0, y=0.0)],
+        world={"min_x": -60.0, "max_x": 60.0, "min_y": -10.0, "max_y": 10.0},
+    )
+    assert validate_scenario(scenario) == []
+
+    output = tmp_path / "out-of-map"
+    result = run_gazebo(scenario, output, timeout=30, watchdog=90)
+
+    assert result.status == "mission_failed"
+    assert result.reason.startswith("navigation_goal_outside_map:")
+    details = json.loads((output / "map-bounds-failure.json").read_text())
+    assert details["reason_code"] == "navigation_goal_outside_map"
+    assert details["requested_goal"]["x"] == 50.0
+    assert details["observed_bounds"] is not None
+    assert json.loads((output / "result.json").read_text())["reason"] == result.reason
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(os.environ.get("ENVFUZZ_GAZEBO_TEST") != "1", reason="requires ROS 2 and Gazebo")
+def test_in_bounds_multi_goal_mission_dispatches_all_goals(tmp_path):
+    scenario = Scenario(goals=[Pose(x=1.0, y=0.0), Pose(x=2.0, y=0.0)])
+    output = tmp_path / "multi-goal"
+
+    result = run_gazebo(scenario, output, timeout=60, watchdog=120)
+
+    assert result.status == "completed", (output / "logs.txt").read_text()
+    metrics = json.loads((output / "metrics.json").read_text())
+    assert metrics["goals_reached"] == 2

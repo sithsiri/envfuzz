@@ -33,6 +33,10 @@ The ordinary simulator is designed to run without ROS-independent Python paths r
 
 5. **Use a fixed overview for the first viewer.** Configure Gazebo's actual GUI view to keep the robot and enough of the environment visible throughout replay. A fixed overview is preferable to an automatically tracking camera for understanding where the robot is relative to obstacles and restricted areas. Validate the framing against representative failures.
 
+6. **Persist replay job history in the campaign.** Store a versioned job ledger at `manual-reviews/replay-jobs.json`, updating it atomically as jobs change state and each repeat completes. On review-server startup, retain completed history and mark queued or running jobs as interrupted, since their subprocesses cannot be resumed safely. The replay bundles remain beside the ledger under `manual-reviews/case-<id>/...`.
+
+7. **Scope replay history to the selected case attempt.** The jobs endpoint accepts case and attempt filters, and the GUI requests only the selected candidate's jobs. Include each attempt's `sim_duration` from its result bundle in candidate data and show it in the left queue.
+
 ## Risks / Trade-offs
 
 - [Risk] Gazebo GUI may not run correctly with Xvfb and Mesa software OpenGL in the current ROS/Gazebo image. → Build a minimal rendering probe early; verify a video can be produced on the target headless server before wiring the reviewer UI. Add a documented GPU runtime only if software rendering is insufficient.
@@ -40,6 +44,7 @@ The ordinary simulator is designed to run without ROS-independent Python paths r
 - [Risk] A graphical replay may not reproduce timing-sensitive behavior exactly. → Keep original episode results authoritative, record the original bundle and replay origin, and label the generated output as replay evidence.
 - [Risk] Gazebo may open a GUI that renders the world but does not frame the robot usefully. → Validate the default view with representative scenarios and tune the simulator GUI camera configuration as part of the feature.
 - [Risk] A cancelled reviewer job could leave a container or encoder running. → Tie container and child-process cleanup to the existing bounded replay job lifecycle and validate cancellation.
+- [Risk] A server restart can interrupt a replay and leave a partial bundle. → Persist partial repeat results, mark the job interrupted, and keep already-produced bundle artifacts available for inspection.
 
 ## Migration Plan
 

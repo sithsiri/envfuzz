@@ -120,7 +120,8 @@ envfuzz review runs/campaign --serve
 
 The reviewer defaults to `127.0.0.1:8765`, opens a browser, presents the
 behavior-failure queue, and lets you inspect evidence and update manual-review
-state. Use `--no-open` for a terminal-only workflow.
+state. Each queue entry includes simulation duration from the original result.
+Use `--no-open` for a terminal-only workflow.
 
 Replay jobs are available from candidate detail pages:
 
@@ -149,6 +150,15 @@ building the base image:
 docker build -t envfuzz:jazzy .
 docker build -f docker/Dockerfile.video -t envfuzz:jazzy-video .
 ```
+
+Replay job history is saved in
+`runs/campaign/manual-reviews/replay-jobs.json`; replay bundles, including
+`episode.mp4`, are saved below
+`runs/campaign/manual-reviews/case-<case>/<job-id>-repeat-<number>/bundle/`.
+The reviewer reloads completed replay records after a server restart. A job
+that was queued or running during the restart is labeled interrupted, and any
+repeat results already recorded remain available. Replay lists are scoped to
+the currently selected case and attempt.
 
 Request a recorded Gazebo view from the reviewer with:
 

@@ -21,6 +21,29 @@ campaign, or replay selection while preserving normal execution when video is di
 - **THEN** behavior and bundle generation remain unchanged and no video artifact
   is required
 
+#### Scenario: A replay is recorded
+- **WHEN** an operator enables video for a replay
+- **THEN** the replay bundle records that it originated from the selected
+  original bundle
+
+#### Scenario: Video is requested for a replay
+- **WHEN** an operator enables video for a selected replay
+- **THEN** the replay bundle includes a video of Gazebo's rendered simulator
+  view and a bundle-relative reference to it
+- **AND** the graphical view marks the robot's start and each navigation goal
+  with distinct colors and shapes
+- **AND** those review-only markers are elevated above the robot's planar
+  sensing layer
+- **AND** their visibility flags exclude them from robot rendering sensors
+  while leaving them visible in the Gazebo GUI
+
+#### Scenario: A replay fails before the robot moves
+- **WHEN** navigation aborts shortly after Gazebo starts
+- **THEN** capture begins when the Gazebo GUI window is ready so the clip
+  includes the rendered scenario and its start and goal markers
+- **AND** the replay result retains the navigation failure independently from
+  video availability
+
 ### Requirement: Bind video to episode evidence
 Recorded video SHALL identify the exact episode configuration and preserve its
 origin alongside the bundle.
@@ -64,6 +87,7 @@ selected candidate from the local review interface.
 - **WHEN** the operator enables video while starting replay
 - **THEN** the replay bundle uses the existing replay-origin and video metadata contracts
 - **AND** the interface reports when video is available or unavailable
+- **AND** an available video shows Gazebo's rendered simulator view
 
 #### Scenario: An operator retries an interesting replay
 - **WHEN** a replay job completes
@@ -74,3 +98,43 @@ selected candidate from the local review interface.
 - **WHEN** the local host cannot launch the replay backend
 - **THEN** the job reports an explicit infrastructure failure
 - **AND** the interface preserves the original bundle and manual-review state
+
+#### Scenario: Replay history survives review server restart
+- **WHEN** the review server restarts after replay jobs have been created
+- **THEN** completed job records and their artifact links remain available from
+  the campaign
+- **AND** queued or running jobs are shown as interrupted with any completed
+  repeat results retained
+
+#### Scenario: Replay history is shown only for its originating candidate
+- **WHEN** an operator views a candidate in the review interface
+- **THEN** the replay list contains only jobs for that case and attempt
+- **AND** switching candidates refreshes the list for the newly selected case
+  and attempt
+
+#### Scenario: Case queue shows simulation duration
+- **WHEN** candidate results include a simulation duration
+- **THEN** the review queue displays that duration beside the case
+- **AND** missing duration values are presented as unknown
+
+### Requirement: Isolated graphical replay on a headless host
+The system SHALL generate requested Gazebo replay video without requiring or
+using a host display session.
+
+#### Scenario: Video replay runs without a host display
+- **GIVEN** the host has no `DISPLAY` and may have other display workloads
+- **WHEN** an operator requests video for a selected replay
+- **THEN** Gazebo's graphical replay and capture use an isolated display
+  environment
+- **AND** no other host display session is required, captured, or interrupted
+
+### Requirement: Preserve replay results when video capture fails
+Failure to render or record replay video SHALL be reported independently and
+SHALL NOT replace or erase the replay's simulation result.
+
+#### Scenario: Graphical capture is unavailable
+- **WHEN** the replay completes but its graphical display or video encoder
+  fails
+- **THEN** the replay retains its result and diagnostic artifacts
+- **AND** the video metadata reports an unavailable or failed status and the
+  reason

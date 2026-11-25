@@ -34,7 +34,7 @@ def _campaign(tmp_path):
     timeout_bundle = root / "case-000001" / "attempt-000001" / "bundle"
     timeout_bundle.mkdir(parents=True)
     (timeout_bundle / "result.json").write_text(
-        EpisodeResult(status="timeout", classification="behavior").model_dump_json(),
+        EpisodeResult(status="timeout", classification="behavior", sim_duration=12.5).model_dump_json(),
     )
     (timeout_bundle / "scenario.json").write_text(json.dumps({
         "challenge": {"width_bin": 2, "clutter_count": 4, "goal_distance_bin": 1},
@@ -66,6 +66,7 @@ def test_export_separates_behavior_candidates_from_infrastructure(tmp_path):
     assert candidate["status"] == "timeout"
     assert candidate["classification"] == "behavior"
     assert candidate["review_status"] == "unreviewed"
+    assert candidate["sim_duration"] == 12.5
     assert json.loads((root / "review-candidates.json").read_text())["candidate_count"] == 1
     assert "watchdog" not in (root / "review-candidates.csv").read_text()
 
@@ -252,6 +253,37 @@ def test_replay_job_reports_launch_failure(tmp_path, monkeypatch):
 
     assert final["state"] == "failed"
     assert "launch failed" in final["error"].lower()
+
+
+def test_replay_jobs_survive_restart_and_are_case_scoped(tmp_path, monkeypatch):
+    root = _campaign(tmp_path)
+    jobs = ReplayJobs(root, "local", "envfuzz:jazzy")
+    monkeypatch.setattr(jobs, "_replay", lambda source, output, video, job_id: "timeout")
+    first = jobs.create(1, 1, "case-000001/attempt-000001/bundle", 1, False)
+    jobs.executor.shutdown(wait=True)
+    expected = jobs.get(first["id"])
+
+    restarted = ReplayJobs(root, "local", "envfuzz:jazzy")
+    assert restarted.get(first["id"]) == expected
+    assert restarted.all(case=1, attempt=1) == [expected]
+    assert restarted.all(case=2) == []
+    restarted.executor.shutdown(wait=True)
+
+
+def test_replay_jobs_mark_active_jobs_interrupted_after_restart(tmp_path):
+    root = _campaign(tmp_path)
+    store = root / "manual-reviews" / ReplayJobs.STORE_NAME
+    store.parent.mkdir(parents=True)
+    store.write_text(json.dumps({"schema_version": "1", "jobs": [{
+        "id": "active", "case": 1, "attempt": 1, "bundle": "case-000001/attempt-000001/bundle",
+        "repeats": 1, "video": False, "state": "running", "results": [], "error": None,
+    }]}))
+
+    jobs = ReplayJobs(root, "local", "envfuzz:jazzy")
+
+    assert jobs.get("active")["state"] == "interrupted"
+    assert "restarted" in jobs.get("active")["error"]
+    jobs.executor.shutdown(wait=True)
 
 
 def test_video_replay_uses_isolated_video_image(tmp_path, monkeypatch):
